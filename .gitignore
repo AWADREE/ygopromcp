@@ -41,18 +41,3 @@
 /gframe/ygopro.aps
 /premake5
 /premake5.exe
-
-# local dev artifacts (not part of the fork)
-/Qwen3-VL-Embedding-2B/
-/autokey2/
-/nn/
-/pic/
-/picx/
-/pre.sh
-/ygoskill/
-/core.*
-/vgcore.*
-
-# the local ygocli workspace (server + older client) is not part of this repo
-/ygocli/
-/tests/__pycache__/

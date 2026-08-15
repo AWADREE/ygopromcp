@@ -792,6 +792,19 @@ static void MCP_AddToggleCard(ClientCard* card) { g_actions.push_back({MCActionK
 static void MCP_RunAction(const MCAction& a) {
     if (a.kind == MCActionKind::MENU_CARD_CLICK) {
         if (a.card) mainGame->dField.menu_card = a.card;
+        // MCP always commands a SPECIFIC card, never the location-list flow:
+        // the menu buttons (activate/sset/mset/...) branch on list_command,
+        // which the GUI right-click ShowMenu sets to 0 for HAND/MZONE/SZONE
+        // cards. The MCP bridge bypasses ShowMenu, so list_command can be
+        // stale (e.g. COMMAND_ACTIVATE left by a previous chain panel at
+        // duelclient.cpp:1891); with a stale non-zero value, BUTTON_CMD_ACTIVATE
+        // enters the location-list branch and shows an EMPTY
+        // "请选择要发动效果的卡" window (the card sits in SZone while the
+        // branch scans command_location). Reset the location-list state so the
+        // direct single-card response path is always taken.
+        mainGame->dField.list_command = 0;
+        mainGame->dField.command_location = 0;
+        mainGame->dField.command_controler = 0;
         MCP_Click(a.elem);
     } else if (a.kind == MCActionKind::POS) {
         // The position buttons only stage the response and rely on the fade
@@ -2186,7 +2199,16 @@ static json ToolSchema(const char* name, const char* desc, json props) {
 static std::string MCP_Execute(MCPJob* job) {
     if (job->method == "initialize") {
         job->ok = true;
-        job->result = {{"protocolVersion", "2024-11-05"}, {"capabilities", json::object()}};
+        // serverInfo is REQUIRED by the MCP SDK's InitializeResultSchema; the
+        // tools capability must be advertised or listTools() returns empty.
+        job->result = {{"protocolVersion", "2024-11-05"},
+                       {"capabilities", {{"tools", json::object()}}},
+                       {"serverInfo", {{"name", "ygopro-mcp"}, {"version", "1.0.0"}}}};
+        return "";
+    }
+    if (job->method == "ping") {
+        job->ok = true;
+        job->result = json::object();
         return "";
     }
     if (job->method == "tools/list") {
