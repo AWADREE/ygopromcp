@@ -167,6 +167,8 @@ public:
 	void ShowCardInfoInList(ClientCard* pcard, irr::gui::IGUIElement* element, irr::gui::IGUIElement* parent);
 	void SetResponseSelectedCards() const;
 	void SetResponseSelectedOption() const;
+	int EncodeOptionResponse(int option_index) const;        // option index -> response int (IDLE/BATTLE bit encoding); shared with MCP
+	static unsigned ZoneFlag(int ctrl, int loc, int seq);    // SELECT_PLACE zone bitmask for (player, location, seq); shared with MCP
 	// Game-owned response builders (single source of truth for the response
 	// byte formats; shared by the mouse handler and the MCP bridge):
 	void RespondZones();                                  // SELECT_PLACE/DISFIELD: pack selected_field as [player,loc,seq]

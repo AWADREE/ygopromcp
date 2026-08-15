@@ -20,8 +20,6 @@
 
 namespace ygo {
 
-std::deque<std::string> g_mcp_chat;   // recent incoming chat (see duelclient.h)
-
 namespace {
 	unsigned connect_state{ CONNECT_STATE_NONE };
 	unsigned char response_buf[SIZE_RETURN_VALUE]{};
@@ -893,23 +891,9 @@ void DuelClient::HandleSTOCPacketLan(unsigned char* data, size_t len) {
 		BufferIO::CopyCharArray(chat_msg, msg);
 		mainGame->gMutex.lock();
 		mainGame->AddChatMsg(msg, player, play_sound);
-		// MCP chat log (server announcements, countdowns, room chat):
-		// "<player>: <text>" so the bridge can emit "[chat] <player>: <text>".
-		{
-			char buf8[LEN_CHAT_MSG * 4];
-			BufferIO::EncodeUTF8(msg, buf8);
-			std::string who;
-			if (player == 8) who = "Server";              // system custom message
-			else if (player >= 4) who = "System";
-			else if (player == 0 || player == 1) {
-				char n8[128];
-				BufferIO::EncodeUTF8(player == 0 ? mainGame->dInfo.hostname : mainGame->dInfo.clientname, n8);
-				who = n8;
-			} else who = "P" + std::to_string(player);
-			g_mcp_chat.push_back(who + ": " + buf8);
-			if (g_mcp_chat.size() > 64)
-				g_mcp_chat.pop_front();
-		}
+		// MCP chat log: "<player>: <text>" so the bridge can emit
+		// "[chat] <player>: <text>" (formatted inside the bridge).
+		MCP_NotifyChat(msg, player);
 		mainGame->gMutex.unlock();
 		break;
 	}

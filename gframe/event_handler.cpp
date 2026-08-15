@@ -1315,14 +1315,7 @@ bool ClientField::OnEvent(const irr::SEvent& event) {
 				break;
 			}
 			case MSG_SELECT_SUM: {
-				if (!clicked_card || !clicked_card->is_selectable)
-					break;
-				if (clicked_card->is_selected) {
-					auto it = std::find(selected_cards.begin(), selected_cards.end(), clicked_card);
-					selected_cards.erase(it);
-				} else
-					selected_cards.push_back(clicked_card);
-				ShowSelectSum(false);
+				ToggleSelectCard(clicked_card);
 				break;
 			}
 			}
@@ -2364,19 +2357,31 @@ void ClientField::SetResponseSelectedCards() const {
 	DuelClient::SetResponseB(respbuf, len + 1);
 }
 void ClientField::SetResponseSelectedOption() const {
-	if(mainGame->dInfo.curMsg == MSG_SELECT_OPTION) {
-		DuelClient::SetResponseI(selected_option);
-	} else {
-		int index = select_options_index[selected_option];
-		if(mainGame->dInfo.curMsg == MSG_SELECT_IDLECMD) {
-			DuelClient::SetResponseI((index << 16) + 5);
-		} else if(mainGame->dInfo.curMsg == MSG_SELECT_BATTLECMD) {
-			DuelClient::SetResponseI(index << 16);
-		} else {
-			DuelClient::SetResponseI(index);
-		}
-	}
+	DuelClient::SetResponseI(EncodeOptionResponse((int)selected_option));
 	mainGame->HideElement(mainGame->wOptions, true);
+}
+
+// OPTION / multi-activation response value (single source of truth for the
+// IDLE/BATTLE bit encoding; shared with the MCP bridge). option_index is the
+// index into select_options; the payload's option_index maps through
+// select_options_index when present (multi-activation windows).
+int ClientField::EncodeOptionResponse(int option_index) const {
+	if(mainGame->dInfo.curMsg == MSG_SELECT_OPTION)
+		return option_index;
+	int index = (size_t)option_index < select_options_index.size() ? select_options_index[option_index] : option_index;
+	if(mainGame->dInfo.curMsg == MSG_SELECT_IDLECMD)
+		return (index << 16) + 5;
+	if(mainGame->dInfo.curMsg == MSG_SELECT_BATTLECMD)
+		return index << 16;
+	return index;
+}
+
+// SELECT_PLACE zone bitmask for (player, location, sequence): self mzone
+// seq 0-6 / szone seq 0-7, opponent mirrored at 0x10000/0x1000000.
+unsigned ClientField::ZoneFlag(int ctrl, int loc, int seq) {
+	if(loc == LOCATION_MZONE)
+		return ctrl ? (0x10000u << seq) : (1u << seq);
+	return ctrl ? (0x1000000u << seq) : (0x100u << seq);
 }
 
 // SELECT_PLACE / SELECT_DISFIELD response: pack the currently selected zones
@@ -2386,26 +2391,16 @@ void ClientField::SetResponseSelectedOption() const {
 void ClientField::RespondZones() {
 	unsigned char respbuf[80];
 	int p = 0;
-	int filter = 1;
-	for (int i = 0; i < 7; ++i, filter <<= 1)
-		if (selected_field & filter) {
-			respbuf[p] = mainGame->LocalPlayer(0); respbuf[p + 1] = LOCATION_MZONE; respbuf[p + 2] = i; p += 3;
-		}
-	filter = 0x100;
-	for (int i = 0; i < 8; ++i, filter <<= 1)
-		if (selected_field & filter) {
-			respbuf[p] = mainGame->LocalPlayer(0); respbuf[p + 1] = LOCATION_SZONE; respbuf[p + 2] = i; p += 3;
-		}
-	filter = 0x10000;
-	for (int i = 0; i < 7; ++i, filter <<= 1)
-		if (selected_field & filter) {
-			respbuf[p] = mainGame->LocalPlayer(1); respbuf[p + 1] = LOCATION_MZONE; respbuf[p + 2] = i; p += 3;
-		}
-	filter = 0x1000000;
-	for (int i = 0; i < 8; ++i, filter <<= 1)
-		if (selected_field & filter) {
-			respbuf[p] = mainGame->LocalPlayer(1); respbuf[p + 1] = LOCATION_SZONE; respbuf[p + 2] = i; p += 3;
-		}
+	for(int ctrl = 0; ctrl < 2; ++ctrl) {
+		for (int i = 0; i < 7; ++i)
+			if (selected_field & ZoneFlag(ctrl, LOCATION_MZONE, i)) {
+				respbuf[p] = mainGame->LocalPlayer(ctrl); respbuf[p + 1] = LOCATION_MZONE; respbuf[p + 2] = i; p += 3;
+			}
+		for (int i = 0; i < 8; ++i)
+			if (selected_field & ZoneFlag(ctrl, LOCATION_SZONE, i)) {
+				respbuf[p] = mainGame->LocalPlayer(ctrl); respbuf[p + 1] = LOCATION_SZONE; respbuf[p + 2] = i; p += 3;
+			}
+	}
 	selectable_field = 0;
 	selected_field = 0;
 	DuelClient::SetResponseB(respbuf, p);

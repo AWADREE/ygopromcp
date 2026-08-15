@@ -1,9 +1,11 @@
 // MCP bridge implementation. See mcp.h.
 //
-// Protocol: newline-delimited JSON-RPC 2.0. Tools: ygo_choose, ygo_state,
-// ygo_log, ygo_card, ygo_chat, ygo_chatlog, ygo_surrender, ygo_disconnect.
-// Only the network-play path (join room, lobby, RPS, turn-order, duel
-// prompts) is supported; other game modes are out of scope for the MCP mode.
+// Protocol: newline-delimited JSON-RPC 2.0. Tools: ygo_connect, ygo_choose,
+// ygo_card, ygo_chat, ygo_surrender, ygo_disconnect (the former ygo_state /
+// ygo_log / ygo_chatlog tools were folded into the text block). ping is the
+// standard MCP liveness method. Only the network-play path (join room, lobby,
+// RPS, turn-order, duel prompts) is supported; other game modes are out of
+// scope for the MCP mode.
 //
 // Threading: a reader thread owns stdin and writes responses to a saved
 // stdout fd (the app's stdout is redirected to stderr at startup). All game
@@ -128,6 +130,13 @@ static std::deque<MCPJob*> g_queue;
 static std::string MCP_Execute(MCPJob* job);
 static void dbg(const char* s) { if (std::getenv("YGOCLI_MCP_DEBUG")) { fprintf(stderr, "[mcp] %s\n", s); fflush(stderr); } }
 
+// Tools whose response is held until the next decision point (coroutine
+// model, design doc §1). Single source of truth for the blocking set; the
+// reader thread and the executor both consult it.
+static bool MCP_IsBlockingTool(const std::string& name) {
+    return name == "ygo_connect" || name == "ygo_choose" || name == "ygo_surrender";
+}
+
 static MCPJob* MCP_PopJob() {
     std::lock_guard<std::mutex> lk(g_qmtx);
     if (g_queue.empty()) return nullptr;
@@ -155,7 +164,7 @@ static void MCP_ReaderThread() {
         // blocking tools (coroutine): the response waits for a decision point
         if (job->method == "tools/call" && job->params.contains("name")) {
             std::string n = job->params.value("name", "");
-            if (n == "ygo_connect" || n == "ygo_choose" || n == "ygo_surrender")
+            if (MCP_IsBlockingTool(n))
                 job->blocking = true;
         }
         {
@@ -199,13 +208,14 @@ static void MCP_ReaderThread() {
 
 // forward decls (helpers are defined further down)
 static std::string U8(const wchar_t* w);
-static const char* MCP_LogLoc(int loc);
-static const char* MCP_PhaseName(uint16_t ph);
 static const char* MCP_PhaseShort(uint16_t ph);
+static const char* MCP_EffectType(uint32_t code);
 
 static std::atomic<uint64_t> g_stoc_seq{ 0 };    // monotonic STOC counter
 static std::atomic<uint16_t> g_phase{ 0 };       // current phase (from MSG_NEW_PHASE)
 static std::atomic<int> g_cur_turn_player{ 0 };  // current turn player, local view (from MSG_NEW_TURN)
+static uint32_t g_last_summon_code = 0;          // card code from the last SUMMONING family (for SUMMONED lines)
+static uint8_t g_solving_chain = 0;              // chain currently being solved (from MSG_CHAIN_SOLVING)
 
 static std::mutex g_log_mtx;                     // guards g_log + g_mentioned
 static std::deque<std::string> g_log;            // narration ring (drained by the text block)
@@ -248,6 +258,22 @@ void MCP_NotifyDeckError(const wchar_t* msg) {
     MCP_Log("[!] deck rejected: " + U8(msg));
     if (g_connect_phase != ConnectPhase::NONE)
         g_connect_deck_err = true;
+}
+
+// Incoming chat (STOC_CHAT): "<player>: <text>" into the shared narration
+// ring (design doc §8). Runs on the network thread, publish-only.
+void MCP_NotifyChat(const wchar_t* msg, int player) {
+    char buf8[LEN_CHAT_MSG * 4];
+    BufferIO::EncodeUTF8(msg, buf8);
+    std::string who;
+    if (player == 8) who = "Server";              // system custom message
+    else if (player >= 4) who = "System";
+    else if (player == 0 || player == 1) {
+        char n8[128];
+        BufferIO::EncodeUTF8(player == 0 ? mainGame->dInfo.hostname : mainGame->dInfo.clientname, n8);
+        who = n8;
+    } else who = "P" + std::to_string(player);
+    MCP_Log("[chat] " + who + ": " + buf8);
 }
 
 // Narration log: parse the display/event subset of the MSG_* stream on the
@@ -388,6 +414,7 @@ void MCP_NotifyGameMsg(const unsigned char* msg, size_t len) {
         uint8_t ctrl = rd8();
         uint8_t loccode = rd8();
         uint8_t seq = rd8();
+        g_last_summon_code = code;
         MCP_Mention(code);
         std::string who_s = who(ctrl);
         std::string verb = msg[0] == MSG_SUMMONING ? " summons "
@@ -400,9 +427,12 @@ void MCP_NotifyGameMsg(const unsigned char* msg, size_t len) {
         MCP_Log(who_s + verb + name(code) + " " + src + locseq(loccode, seq));
         break;
     }
-    case MSG_SUMMONED: MCP_Log("summoned"); break;
-    case MSG_SPSUMMONED: MCP_Log("special summoned"); break;
-    case MSG_FLIPSUMMONED: MCP_Log("flip summoned"); break;
+    // The SUMMONED family payload carries no code (the client's own case
+    // prints a fixed system string); the card name comes from the preceding
+    // SUMMONING/SPSUMMONING/FLIPSUMMONING message (design doc §5).
+    case MSG_SUMMONED: MCP_Log(name(g_last_summon_code) + " summoned"); break;
+    case MSG_SPSUMMONED: MCP_Log(name(g_last_summon_code) + " special summoned"); break;
+    case MSG_FLIPSUMMONED: MCP_Log(name(g_last_summon_code) + " flip summoned"); break;
     case MSG_CHAINING: {
         uint32_t code = (uint32_t)rd32() & 0x7fffffff;
         uint8_t pcc = rd8(), pcl = rd8(), pcs = rd8();
@@ -412,8 +442,10 @@ void MCP_NotifyGameMsg(const unsigned char* msg, size_t len) {
         rd8();  // ct
         MCP_Mention(code);
         size_t n = mainGame->dField.chains.size() + 1;
+        std::string et = MCP_EffectType(code);
         MCP_Log("C" + std::to_string(n) + " " + who(pcc) + " activates "
-                + name(code) + "(" + locseq(pcl, pcs) + ")");
+                + name(code) + "(" + locseq(pcl, pcs) + ")"
+                + (et.empty() ? "" : " " + et));
         break;
     }
     case MSG_CHAINED: {
@@ -422,6 +454,7 @@ void MCP_NotifyGameMsg(const unsigned char* msg, size_t len) {
     }
     case MSG_CHAIN_SOLVING: {
         uint8_t ct = rd8();
+        g_solving_chain = ct;
         MCP_Log("C" + std::to_string((int)ct) + " solving");
         break;
     }
@@ -436,17 +469,27 @@ void MCP_NotifyGameMsg(const unsigned char* msg, size_t len) {
     }
     case MSG_CHAIN_NEGATED:
     case MSG_CHAIN_DISABLED: {
-        uint8_t ct = rd8();
+        uint8_t ct = rd8();   // the NEGATED chain
         std::string card;
-        std::string who_s;
         if (ct >= 1 && (size_t)ct <= mainGame->dField.chains.size()) {
             auto& ch = mainGame->dField.chains[ct - 1];
             ClientCard* c = ch.chain_card;
             card = c ? name(c->code) : name(ch.code);
-            who_s = (ch.controler == 0) ? "self" : "oppo";
+            MCP_Mention(c ? c->code : ch.code);
         }
-        MCP_Log("C" + std::to_string((int)ct) + " " + who_s + " " + card
-                + (msg[0] == MSG_CHAIN_NEGATED ? " negated" : " disabled"));
+        // negator = the chain currently being solved (the one whose effect
+        // negated); fall back to the last chain in the vector.
+        size_t negator = g_solving_chain ? g_solving_chain : mainGame->dField.chains.size();
+        std::string neg_who;
+        if (negator >= 1 && negator <= mainGame->dField.chains.size())
+            neg_who = (mainGame->dField.chains[negator - 1].controler == 0) ? "self" : "oppo";
+        const char* verb = (msg[0] == MSG_CHAIN_NEGATED) ? "negates" : "disables";
+        const char* suffix = (msg[0] == MSG_CHAIN_NEGATED) ? "negated" : "disabled";
+        if (!card.empty()) {
+            MCP_Log("C" + std::to_string(negator) + " " + neg_who + " " + verb
+                    + " C" + std::to_string((int)ct) + " " + card);
+            MCP_Log("C" + std::to_string((int)ct) + " " + card + " " + suffix);
+        }
         break;
     }
     case MSG_ATTACK: {
@@ -633,37 +676,19 @@ static const char* MCP_LocName(int loc) {
     }
 }
 
-// Short zone label for the narration log (H->GY etc.).
-static const char* MCP_LogLoc(int loc) {
-    switch (loc) {
-    case LOCATION_DECK: return "D";
-    case LOCATION_HAND: return "H";
-    case LOCATION_MZONE: return "MZ";
-    case LOCATION_SZONE: return "SZ";
-    case LOCATION_GRAVE: return "GY";
-    case LOCATION_REMOVED: return "RF";
-    case LOCATION_EXTRA: return "EX";
-    case LOCATION_OVERLAY: return "OV";
-    case LOCATION_FZONE: return "FZ";
-    case LOCATION_PZONE: return "PZ";
-    default: return "?";
-    }
-}
-
-static const char* MCP_PhaseName(uint16_t ph) {
-    switch (ph) {
-    case PHASE_DRAW: return "Draw";
-    case PHASE_STANDBY: return "Standby";
-    case PHASE_MAIN1: return "Main1";
-    case PHASE_BATTLE_START: return "BatStart";
-    case PHASE_BATTLE_STEP: return "Step";
-    case PHASE_DAMAGE: return "Dmg";
-    case PHASE_DAMAGE_CAL: return "DmgCal";
-    case PHASE_BATTLE: return "Battle";
-    case PHASE_MAIN2: return "Main2";
-    case PHASE_END: return "End";
-    default: return "?";
-    }
+// Effect type tag for the activate line (design doc §5: [ignition]/[quick]/
+// [trigger]/[continuous]... when the client can derive it). Only card-type
+// categories are derivable client-side; monster effect categories
+// (ignition/trigger/quick) are not exposed in the card data.
+static const char* MCP_EffectType(uint32_t code) {
+    CardData cd;
+    if (!dataManager.GetData(code, &cd)) return "";
+    if (cd.type & TYPE_QUICKPLAY) return "[quick]";
+    if (cd.type & TYPE_COUNTER) return "[counter]";
+    if (cd.type & TYPE_CONTINUOUS) return "[continuous]";
+    if (cd.type & TYPE_FIELD) return "[field]";
+    if (cd.type & TYPE_EQUIP) return "[equip]";
+    return "";
 }
 
 // Monster position label (FA = face-up attack, etc.).
@@ -771,7 +796,7 @@ static std::string MCP_CardLine(uint32_t code) {
 // choice surface
 // ---------------------------------------------------------------------------
 
-enum class MCActionKind { CLICK, MENU_CARD_CLICK, POS, TOGGLE_CARD, PLACE, CHAIN_CARD, CHAIN_DECLINE, OPTION, SUM, ANNOUNCE_RACE, ANNOUNCE_ATTRIB, ANNOUNCE_CARD, ANNOUNCE_NUMBER };
+enum class MCActionKind { CLICK, CARD_COMMAND, POS, TOGGLE_CARD, PLACE, CHAIN_CARD, CHAIN_DECLINE, OPTION, SUM, ANNOUNCE_RACE, ANNOUNCE_ATTRIB, ANNOUNCE_CARD, ANNOUNCE_NUMBER };
 
 struct MCAction {
     MCActionKind kind = MCActionKind::CLICK;
@@ -786,11 +811,11 @@ static std::set<uint32_t> g_mention_ctx;  // card codes seen while rendering sta
 
 static void MCP_AddClick(int id) { g_actions.push_back({MCActionKind::CLICK, MCP_El(id), nullptr}); }
 static void MCP_AddClickEl(irr::gui::IGUIElement* el) { g_actions.push_back({MCActionKind::CLICK, el, nullptr}); }
-static void MCP_AddCardCmd(ClientCard* card, irr::gui::IGUIElement* btn) { g_actions.push_back({MCActionKind::MENU_CARD_CLICK, btn, card}); }
+static void MCP_AddCardCmd(ClientCard* card, irr::gui::IGUIElement* btn) { g_actions.push_back({MCActionKind::CARD_COMMAND, btn, card}); }
 static void MCP_AddToggleCard(ClientCard* card) { g_actions.push_back({MCActionKind::TOGGLE_CARD, nullptr, card}); }
 
 static void MCP_RunAction(const MCAction& a) {
-    if (a.kind == MCActionKind::MENU_CARD_CLICK) {
+    if (a.kind == MCActionKind::CARD_COMMAND) {
         if (a.card) mainGame->dField.menu_card = a.card;
         // MCP always commands a SPECIFIC card, never the location-list flow:
         // the menu buttons (activate/sset/mset/...) branch on list_command,
@@ -859,21 +884,11 @@ static void MCP_RunAction(const MCAction& a) {
         // Effect option: MSG_SELECT_OPTION responds with the option index;
         // a multi-activation opened from IDLE/BATTLE needs the activatable
         // index with the IDLE/BATTLE bit encoding (same as the game's own
-        // SetResponseSelectedOption).
+        // SetResponseSelectedOption -- shared via EncodeOptionResponse).
         auto& f = mainGame->dField;
         int idx = a.pos;
         if (idx < 0 || (size_t)idx >= f.select_options.size()) return;
-        if (mainGame->dInfo.curMsg == MSG_SELECT_OPTION) {
-            DuelClient::SetResponseI(idx);
-        } else {
-            int index = (size_t)idx < f.select_options_index.size() ? f.select_options_index[idx] : idx;
-            if (mainGame->dInfo.curMsg == MSG_SELECT_IDLECMD)
-                DuelClient::SetResponseI((index << 16) + 5);
-            else if (mainGame->dInfo.curMsg == MSG_SELECT_BATTLECMD)
-                DuelClient::SetResponseI(index << 16);
-            else
-                DuelClient::SetResponseI(index);
-        }
+        DuelClient::SetResponseI(f.EncodeOptionResponse(idx));
         if (mainGame->wOptions && mainGame->wOptions->isVisible())
             mainGame->HideElement(mainGame->wOptions, false);
         DuelClient::SendResponse();
@@ -1030,16 +1045,16 @@ static std::string MCP_CommandText() {
 // SELECT_CARD-family: enumerate ALL selectable cards (list or field mode) as
 // toggle actions. No cancel/finish options -- the agent's subset is the
 // answer; an empty subset (indices=[]) cancels a cancelable prompt.
-// Optional min/max override: MSG_SELECT_UNSELECT_CARD must always respond
-// with exactly ONE card (core check_response hardcodes 1,1).
-static std::string MCP_CardsText(int min_override = -1, int max_override = -1) {
+// unselect: MSG_SELECT_UNSELECT_CARD mode -- always respond with exactly ONE
+// card (core check_response hardcodes 1,1).
+static std::string MCP_CardsText(bool unselect = false) {
     auto& f = mainGame->dField;
     std::ostringstream out;
     int min = MCP_AdjMin(f.select_min, f.select_cancelable);
     int max = f.select_max;
-    if (min_override >= 0) {
+    if (unselect) {
         // UNSELECT: cancel/finish flag permits the -1 (cancel) response
-        min = (f.select_cancelable || min_override == 0) ? 0 : 1;
+        min = f.select_cancelable ? 0 : 1;
         max = 1;
     }
     for (size_t i = 0; i < f.selectable_cards.size(); ++i) {
@@ -1140,16 +1155,17 @@ static std::string MCP_PlaceText() {
     auto& f = mainGame->dField;
     std::ostringstream out;
     int n = 0;
-    auto addz = [&](int ctrl, unsigned loc, int seq, unsigned flag) {
+    auto addz = [&](int ctrl, int loc, int seq) {
+        unsigned flag = ClientField::ZoneFlag(ctrl, loc, seq);
         if (!(f.selectable_field & flag)) return;
-        out << n << ". " << (ctrl ? "opp" : "my") << " " << MCP_LocName(loc) << "[" << seq << "]\n";
+        out << n << ". " << (ctrl ? "oppo" : "self") << " " << MCP_LocName(loc) << "[" << seq << "]\n";
         g_actions.push_back({MCActionKind::PLACE, nullptr, nullptr, (int)flag});
         ++n;
     };
-    for (int i = 0; i < 7; ++i) addz(0, LOCATION_MZONE, i, 1u << i);
-    for (int i = 0; i < 8; ++i) addz(0, LOCATION_SZONE, i, 0x100u << i);
-    for (int i = 0; i < 7; ++i) addz(1, LOCATION_MZONE, i, 0x10000u << i);
-    for (int i = 0; i < 8; ++i) addz(1, LOCATION_SZONE, i, 0x1000000u << i);
+    for (int ctrl = 0; ctrl < 2; ++ctrl) {
+        for (int i = 0; i < 7; ++i) addz(ctrl, LOCATION_MZONE, i);
+        for (int i = 0; i < 8; ++i) addz(ctrl, LOCATION_SZONE, i);
+    }
     int min = MCP_AdjMin(f.select_min, f.select_cancelable);
     return MCP_OptionHeader(min, f.select_min, n) + out.str();
 }
@@ -1268,7 +1284,7 @@ static std::string MCP_PromptText(short curMsg) {
         // SelectUnselect sends min=max=2). The game's own toggle sends after
         // one pick; so render min=max=1 (min 0 when cancelable/finishable)
         // and let the toggle path respond.
-        if (!g->dField.selectable_cards.empty()) return MCP_CardsText(1, 1);
+        if (!g->dField.selectable_cards.empty()) return MCP_CardsText(true);
         break;
     }
     case MSG_SELECT_CHAIN: {
@@ -1392,7 +1408,7 @@ static const char* MCP_PhaseShort(uint16_t ph) {
 // Dedup key = (code, marker); first-seen order preserved.
 struct PileEntry { std::string text; uint32_t code; std::string marker; int count = 0; };
 
-static std::string MCP_PileLine(const char* label, const std::vector<ClientCard*>& cards,
+static std::string MCP_PileLine(const char* label, int loc, const std::vector<ClientCard*>& cards,
                                 bool known_when_down /* face-down name known (self piles) */) {
     std::vector<PileEntry> entries;
     auto add = [&](ClientCard* c, const std::string& marker) {
@@ -1404,12 +1420,20 @@ static std::string MCP_PileLine(const char* label, const std::vector<ClientCard*
         e.text = name + (marker.empty() ? "" : "(" + marker + ")");
         entries.push_back(e);
     };
+    // Face-down is SPECIAL only for grave/remove (design doc §4.2): own keeps
+    // its name `name(down)`, the opponent's is `?(down)`. For deck/extra/hand
+    // face-down is NORMAL (no marker) and face-up is the revealed `(up)` state.
+    bool down_special = (loc == LOCATION_GRAVE || loc == LOCATION_REMOVED);
     for (auto* c : cards) {
         bool up = c && (c->position & POS_FACEUP);
         bool down = c && (c->position & POS_FACEDOWN);
-        if (up) add(c, "up");
-        else if (down) add(c, known_when_down ? "down" : "");
-        else add(c, "");
+        if (up && !down_special) add(c, "up");               // deck/extra/hand revealed
+        else if (down && down_special) {                     // grave/remove face-down
+            if (known_when_down) add(c, "down");             // own: name(down)
+            else add(nullptr, "down");                       // oppo: ?(down)
+        } else {
+            add(c, "");                                      // normal / hidden name
+        }
     }
     std::ostringstream out;
     out << "  " << label << ": ";
@@ -1505,11 +1529,11 @@ static std::string MCP_BoardText() {
 
     // oppo piles
     out << "oppo lp" << g->dInfo.lp[1] << "\n";
-    out << MCP_PileLine("deck", f.deck[1], false);
-    out << MCP_PileLine("extra", f.extra[1], false);
-    out << MCP_PileLine("hand", f.hand[1], false);
-    out << MCP_PileLine("grave", f.grave[1], true);
-    out << MCP_PileLine("remove", f.remove[1], true);
+    out << MCP_PileLine("deck", LOCATION_DECK, f.deck[1], false);
+    out << MCP_PileLine("extra", LOCATION_EXTRA, f.extra[1], false);
+    out << MCP_PileLine("hand", LOCATION_HAND, f.hand[1], false);
+    out << MCP_PileLine("grave", LOCATION_GRAVE, f.grave[1], false);
+    out << MCP_PileLine("remove", LOCATION_REMOVED, f.remove[1], false);
     out << "\n";
 
     MCP_FieldTable(out, f);
@@ -1542,10 +1566,10 @@ static std::string MCP_BoardText() {
         dl << "\n";
         out << dl.str();
     }
-    out << MCP_PileLine("extra", f.extra[0], true);
-    out << MCP_PileLine("hand", f.hand[0], false);
-    out << MCP_PileLine("grave", f.grave[0], true);
-    out << MCP_PileLine("remove", f.remove[0], true);
+    out << MCP_PileLine("extra", LOCATION_EXTRA, f.extra[0], true);
+    out << MCP_PileLine("hand", LOCATION_HAND, f.hand[0], true);
+    out << MCP_PileLine("grave", LOCATION_GRAVE, f.grave[0], true);
+    out << MCP_PileLine("remove", LOCATION_REMOVED, f.remove[0], true);
 
     if (g->dInfo.isFinished) out << "Game Over\n";
     return out.str();
@@ -1662,11 +1686,6 @@ static std::string MCP_DrainLog() {
         for (auto& s : g_log) lines.push_back(s);
         g_log.clear();
     }
-    {
-        std::lock_guard<std::mutex> lk(mainGame->gMutex);
-        for (auto& s : g_mcp_chat) lines.push_back("[chat] " + s);
-        g_mcp_chat.clear();
-    }
     std::string out;
     for (auto& s : lines) out += s + "\n";
     return out;
@@ -1708,6 +1727,12 @@ static std::string MCP_DrainExplains() {
 static std::string MCP_BlockText() {
     std::ostringstream out;
     std::string log = MCP_DrainLog();
+    // Connect-flow failure reasons (design doc §3) ride in the # log section
+    // as "[!] <reason>" so the agent sees why ygo_connect failed.
+    if (g_connect_err_set) {
+        log += "[!] " + g_connect_err + "\n";
+        g_connect_err_set = false;   // surfaced once
+    }
     if (!log.empty()) out << "# log\n" << log << "\n";
     out << "# state\n" << MCP_BoardText() << "\n";
     std::string explains = MCP_DrainExplains();
@@ -1751,8 +1776,15 @@ static void MCP_FinishJob(MCPJob* job) {   // for already-set result/error field
 static std::string MCP_DoConnect(const json& args) {
     if (g_connect_phase != ConnectPhase::NONE) return "Error: already connecting";
     if (!mainGame) return "Error: game not ready";
+    // Port may arrive as a JSON string ("7911") or a number (7911); the
+    // client's ygo_connect schema declares it a string but be tolerant.
+    std::string port;
+    if (args.contains("port")) {
+        const json& p = args["port"];
+        if (p.is_string()) port = p.get<std::string>();
+        else if (p.is_number_integer()) port = std::to_string(p.get<int64_t>());
+    }
     std::string host = args.value("host", "");
-    std::string port = args.value("port", "");
     std::string pass = args.value("password", "");
     std::string name = args.value("name", "");
     std::string deck = args.value("deck", "");
@@ -2102,6 +2134,10 @@ static std::string MCP_DoChat(const json& args) {
     uint16_t msgbuf[LEN_CHAT_MSG];
     size_t len = 0;
     size_t i = 0;
+    // UTF-8 -> UTF-16, decoded codepoint-by-codepoint (design doc §8): 4-byte
+    // codepoints become U+FFFD; truncated at 255 UTF-16 units + NUL. This is
+    // NOT BufferIO::DecodeUTF8 (mbsrtowcs is locale-dependent and yields
+    // wchar_t, not the U+FFFD-substituted 16-bit units the wire needs).
     while (i < text.size() && len < LEN_CHAT_MSG - 1) {
         // text is UTF-8; decode one codepoint
         unsigned char c0 = (unsigned char)text[i];
@@ -2178,6 +2214,13 @@ static std::string MCP_DoDisconnect() {
     } else {
         DuelClient::StopClient();
     }
+    // Return to the initial (disconnected) state (design doc §1): a later
+    // ygo_connect must be able to start a fresh join flow.
+    g_connect_phase = ConnectPhase::NONE;
+    g_connect_readied = false;
+    g_connect_deck_err = false;
+    g_connect_err_set = false;
+    g_connect_err.clear();
     MCP_Log("Left the room.");
     return "";
 }
@@ -2295,6 +2338,12 @@ void MCP_Poll() {
     if (g_active_job) {
         bool back_to_menu = mainGame && mainGame->wMainMenu
             && mainGame->wMainMenu->isVisible() && !mainGame->dInfo.isStarted;
+        if (back_to_menu) {
+            // Natural return to the menu (game over / left the room / kicked):
+            // reset the connect flow so a later ygo_connect starts fresh.
+            g_connect_phase = ConnectPhase::NONE;
+            g_connect_readied = false;
+        }
         if (MCP_DecisionPending() || back_to_menu) {
             MCP_CompleteJob(g_active_job, MCP_BlockText());
             g_active_job = nullptr;
@@ -2302,8 +2351,16 @@ void MCP_Poll() {
         return;   // one outstanding request at a time (coroutine model)
     }
     while (auto* job = MCP_PopJob()) {
-        std::string text = MCP_Execute(job);
-        if (!job->ok) {          // JSON-RPC error (unknown tool/method)
+        std::string text;
+        try {
+            text = MCP_Execute(job);
+        } catch (const std::exception& e) {
+            // A malformed argument (e.g. a type mismatch in args) must never
+            // crash the GUI thread: surface it as a JSON-RPC error instead.
+            job->ok = false;
+            job->error_msg = std::string("internal error: ") + e.what();
+        }
+        if (!job->ok) {          // JSON-RPC error (unknown tool/method/bad args)
             MCP_FinishJob(job);
             break;
         }

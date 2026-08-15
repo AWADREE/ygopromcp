@@ -15,8 +15,10 @@
 // See mcp.cpp for the threading contract and the learned caveats.
 namespace ygo {
 
-// Called once at startup (after Game::Initialize) when launched with --mcp.
-// Redirects the app's stdout to stderr and starts the stdin reader thread.
+// Called once at startup, always on (no --mcp flag), BEFORE Game::Initialize
+// (the bridge must own stdout from the very start so the JSON-RPC channel
+// never sees app output -- see gframe.cpp). Redirects the app's stdout to
+// stderr and starts the stdin reader thread.
 void MCP_Init();
 
 // Called after MainLoop returns. Stops the reader thread.
@@ -38,6 +40,10 @@ void MCP_NotifyGameMsg(const unsigned char* msg, size_t len);
 // and the client shows the modal popup. Surfaces the popup text in the log
 // so the agent sees why instead of waiting forever.
 void MCP_NotifyDeckError(const wchar_t* msg);
+// Fires on STOC_CHAT (network thread). Formats "<player>: <text>" and appends
+// it to the same narration ring as MCP_NotifyGameMsg, so chat and duel
+// narration share one bounded deque (drained under one lock).
+void MCP_NotifyChat(const wchar_t* msg, int player);
 
 } // namespace ygo
 
