@@ -162,6 +162,14 @@ project "miniaudio"
                     }
             end
         else
-            includedirs { OPUS_INCLUDE_DIR, OPUSFILE_INCLUDE_DIR, VORBIS_INCLUDE_DIR, OGG_INCLUDE_DIR }
+            local miniaudio_includedirs = {}
+            for _, dir in ipairs({ OPUS_INCLUDE_DIR, OPUSFILE_INCLUDE_DIR, VORBIS_INCLUDE_DIR, OGG_INCLUDE_DIR }) do
+                if dir then
+                    table.insert(miniaudio_includedirs, dir)
+                end
+            end
+            if #miniaudio_includedirs > 0 then
+                includedirs(miniaudio_includedirs)
+            end
         end
     end

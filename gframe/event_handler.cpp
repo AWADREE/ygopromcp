@@ -1293,101 +1293,25 @@ bool ClientField::OnEvent(const irr::SEvent& event) {
 				break;
 			}
 			case MSG_SELECT_CARD: {
-				if(!(hovered_location & 0xe) || !clicked_card || !clicked_card->is_selectable)
+				if(!(hovered_location & 0xe) || !clicked_card)
 					break;
-				if(clicked_card->is_selected) {
-					clicked_card->is_selected = false;
-					int i = 0;
-					while(selected_cards[i] != clicked_card) i++;
-					selected_cards.erase(selected_cards.begin() + i);
-				} else {
-					clicked_card->is_selected = true;
-					selected_cards.push_back(clicked_card);
-				}
-				if((int)selected_cards.size() >= select_max) {
-					SetResponseSelectedCards();
-					ShowCancelOrFinishButton(0);
-					DuelClient::SendResponse();
-				} else if((int)selected_cards.size() >= select_min) {
-					if(selected_cards.size() == selectable_cards.size()) {
-						SetResponseSelectedCards();
-						ShowCancelOrFinishButton(0);
-						DuelClient::SendResponse();
-					} else {
-						select_ready = true;
-						ShowCancelOrFinishButton(2);
-					}
-				} else {
-					select_ready = false;
-					if(select_cancelable && selected_cards.size() == 0)
-						ShowCancelOrFinishButton(1);
-					else
-						ShowCancelOrFinishButton(0);
-				}
+				ToggleSelectCard(clicked_card);
 				break;
 			}
 			case MSG_SELECT_TRIBUTE: {
-				if (!(hovered_location & 0xe) || !clicked_card || !clicked_card->is_selectable)
+				if (!(hovered_location & 0xe) || !clicked_card)
 					break;
-				if(clicked_card->is_selected) {
-					auto it = std::find(selected_cards.begin(), selected_cards.end(), clicked_card);
-					selected_cards.erase(it);
-				} else {
-					selected_cards.push_back(clicked_card);
-				}
-				if(CheckSelectTribute()) {
-					if(selectsum_cards.size() == 0) {
-						SetResponseSelectedCards();
-						ShowCancelOrFinishButton(0);
-						DuelClient::SendResponse();
-					} else {
-						select_ready = true;
-						ShowCancelOrFinishButton(2);
-					}
-				} else {
-					select_ready = false;
-					if (select_cancelable && selected_cards.size() == 0)
-						ShowCancelOrFinishButton(1);
-					else
-						ShowCancelOrFinishButton(0);
-				}
+				ToggleSelectCard(clicked_card);
 				break;
 			}
 			case MSG_SELECT_UNSELECT_CARD: {
-				if (!(hovered_location & 0xe) || !clicked_card || !clicked_card->is_selectable)
+				if (!(hovered_location & 0xe) || !clicked_card)
 					break;
-				if (clicked_card->is_selected) {
-					clicked_card->is_selected = false;
-				} else {
-					clicked_card->is_selected = true;
-				}
-				selected_cards.push_back(clicked_card);
-				if (selected_cards.size() > 0) {
-					ShowCancelOrFinishButton(0);
-					SetResponseSelectedCards();
-					DuelClient::SendResponse();
-				}
+				ToggleSelectCard(clicked_card);
 				break;
 			}
 			case MSG_SELECT_COUNTER: {
-				if (!clicked_card || !clicked_card->is_selectable)
-					break;
-				clicked_card->opParam--;
-				if ((clicked_card->opParam & 0xffff) == 0)
-					clicked_card->is_selectable = false;
-				select_counter_count--;
-				if (select_counter_count == 0) {
-					unsigned short int respbuf[32];
-					for(size_t i = 0; i < selectable_cards.size(); ++i)
-						respbuf[i] = (selectable_cards[i]->opParam >> 16) - (selectable_cards[i]->opParam & 0xffff);
-					mainGame->stHintMsg->setVisible(false);
-					ClearSelect();
-					DuelClient::SetResponseB(respbuf, selectable_cards.size() * 2);
-					DuelClient::SendResponse();
-				} else {
-					myswprintf(formatBuffer, dataManager.GetSysString(204), select_counter_count, dataManager.GetCounterName(select_counter_type));
-					mainGame->stHintMsg->setText(formatBuffer);
-				}
+				ToggleSelectCard(clicked_card);
 				break;
 			}
 			case MSG_SELECT_SUM: {
@@ -2454,6 +2378,171 @@ void ClientField::SetResponseSelectedOption() const {
 	}
 	mainGame->HideElement(mainGame->wOptions, true);
 }
+
+// SELECT_PLACE / SELECT_DISFIELD response: pack the currently selected zones
+// (selected_field bitmask) as [player, location, sequence] triplets, then
+// clear the selection. Single source of truth for the zone response format
+// (the mouse handler commits inline the same way); shared with the MCP bridge.
+void ClientField::RespondZones() {
+	unsigned char respbuf[80];
+	int p = 0;
+	int filter = 1;
+	for (int i = 0; i < 7; ++i, filter <<= 1)
+		if (selected_field & filter) {
+			respbuf[p] = mainGame->LocalPlayer(0); respbuf[p + 1] = LOCATION_MZONE; respbuf[p + 2] = i; p += 3;
+		}
+	filter = 0x100;
+	for (int i = 0; i < 8; ++i, filter <<= 1)
+		if (selected_field & filter) {
+			respbuf[p] = mainGame->LocalPlayer(0); respbuf[p + 1] = LOCATION_SZONE; respbuf[p + 2] = i; p += 3;
+		}
+	filter = 0x10000;
+	for (int i = 0; i < 7; ++i, filter <<= 1)
+		if (selected_field & filter) {
+			respbuf[p] = mainGame->LocalPlayer(1); respbuf[p + 1] = LOCATION_MZONE; respbuf[p + 2] = i; p += 3;
+		}
+	filter = 0x1000000;
+	for (int i = 0; i < 8; ++i, filter <<= 1)
+		if (selected_field & filter) {
+			respbuf[p] = mainGame->LocalPlayer(1); respbuf[p + 1] = LOCATION_SZONE; respbuf[p + 2] = i; p += 3;
+		}
+	selectable_field = 0;
+	selected_field = 0;
+	DuelClient::SetResponseB(respbuf, p);
+}
+
+// SORT response: order[pos] = index of the card to put at final position pos
+// (resp: card i ends up at position respbuf[i]). Same encoding as the game's
+// own sort OK handler. Shared with the MCP bridge.
+void ClientField::RespondSortOrder(const std::vector<int>& order) {
+	unsigned char respbuf[SIZE_RETURN_VALUE]{};
+	size_t n = selectable_cards.size();
+	for (size_t i = 0; i < n; ++i)
+		respbuf[i] = 0;
+	for (size_t pos = 0; pos < order.size() && pos < n; ++pos)
+		respbuf[order[pos]] = (unsigned char)pos;
+	DuelClient::SetResponseB(respbuf, (int)n);
+}
+
+// Field-click card toggle for select-card-family prompts. Extracted from the
+// LMOUSE_LEFT_UP handler so MCP can drive it through the same game logic.
+void ClientField::ToggleSelectCard(ClientCard* clicked_card) {
+	if(!clicked_card || !clicked_card->is_selectable)
+		return;
+	switch(mainGame->dInfo.curMsg) {
+	case MSG_SELECT_CARD: {
+		if(clicked_card->is_selected) {
+			clicked_card->is_selected = false;
+			int i = 0;
+			while(selected_cards[i] != clicked_card) i++;
+			selected_cards.erase(selected_cards.begin() + i);
+		} else {
+			clicked_card->is_selected = true;
+			selected_cards.push_back(clicked_card);
+		}
+		if((int)selected_cards.size() >= select_max) {
+			SetResponseSelectedCards();
+			ShowCancelOrFinishButton(0);
+			DuelClient::SendResponse();
+		} else if((int)selected_cards.size() >= select_min) {
+			if(selected_cards.size() == selectable_cards.size()) {
+				SetResponseSelectedCards();
+				ShowCancelOrFinishButton(0);
+				DuelClient::SendResponse();
+			} else {
+				select_ready = true;
+				ShowCancelOrFinishButton(2);
+			}
+		} else {
+			select_ready = false;
+			if(select_cancelable && selected_cards.size() == 0)
+				ShowCancelOrFinishButton(1);
+			else
+				ShowCancelOrFinishButton(0);
+		}
+		break;
+	}
+	case MSG_SELECT_TRIBUTE: {
+		if(clicked_card->is_selected) {
+			auto it = std::find(selected_cards.begin(), selected_cards.end(), clicked_card);
+			selected_cards.erase(it);
+		} else {
+			selected_cards.push_back(clicked_card);
+		}
+		if(CheckSelectTribute()) {
+			if(selectsum_cards.size() == 0) {
+				SetResponseSelectedCards();
+				ShowCancelOrFinishButton(0);
+				DuelClient::SendResponse();
+			} else {
+				select_ready = true;
+				ShowCancelOrFinishButton(2);
+			}
+		} else {
+			select_ready = false;
+			if (select_cancelable && selected_cards.size() == 0)
+				ShowCancelOrFinishButton(1);
+			else
+				ShowCancelOrFinishButton(0);
+		}
+		break;
+	}
+	case MSG_SELECT_UNSELECT_CARD: {
+		if (clicked_card->is_selected) {
+			clicked_card->is_selected = false;
+		} else {
+			clicked_card->is_selected = true;
+		}
+		selected_cards.push_back(clicked_card);
+		if (selected_cards.size() > 0) {
+			ShowCancelOrFinishButton(0);
+			SetResponseSelectedCards();
+			DuelClient::SendResponse();
+		}
+		break;
+	}
+	case MSG_SELECT_SUM: {
+		if (clicked_card->is_selected) {
+			auto it = std::find(selected_cards.begin(), selected_cards.end(), clicked_card);
+			selected_cards.erase(it);
+		} else
+			selected_cards.push_back(clicked_card);
+		ShowSelectSum(false);
+		break;
+	}
+	case MSG_SELECT_COUNTER: {
+		ClickSelectCounter(clicked_card);
+		break;
+	}
+	default:
+		break;
+	}
+}
+
+// Field-click counter removal for MSG_SELECT_COUNTER (extracted from the
+// mouse handler; shared with MCP like ToggleSelectCard).
+void ClientField::ClickSelectCounter(ClientCard* clicked_card) {
+	if(!clicked_card || !clicked_card->is_selectable)
+		return;
+	clicked_card->opParam--;
+	if ((clicked_card->opParam & 0xffff) == 0)
+		clicked_card->is_selectable = false;
+	select_counter_count--;
+	if (select_counter_count == 0) {
+		unsigned short int respbuf[32];
+		for(size_t i = 0; i < selectable_cards.size(); ++i)
+			respbuf[i] = (selectable_cards[i]->opParam >> 16) - (selectable_cards[i]->opParam & 0xffff);
+		mainGame->stHintMsg->setVisible(false);
+		ClearSelect();
+		DuelClient::SetResponseB(respbuf, selectable_cards.size() * 2);
+		DuelClient::SendResponse();
+	} else {
+		wchar_t formatBuffer[64];
+		myswprintf(formatBuffer, dataManager.GetSysString(204), select_counter_count, dataManager.GetCounterName(select_counter_type));
+		mainGame->stHintMsg->setText(formatBuffer);
+	}
+}
+
 void ClientField::CancelOrFinish() {
 	switch(mainGame->dInfo.curMsg) {
 	case MSG_WAITING: {

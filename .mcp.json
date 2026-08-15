@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "ygocli": {
+      "type": "stdio",
+      "command": "/home/z/ygo/bin/release/YGOPro",
+      "args": [
+        "--mcp", "-k", "-n", "ygocli",
+        "-h", "127.0.0.1", "-p", "7911",
+        "-w", "ygocli", "-d", "example.ydk", "-j"
+      ],
+      "env": {}
+    }
+  }
+}

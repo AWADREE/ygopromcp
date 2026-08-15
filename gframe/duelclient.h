@@ -2,11 +2,18 @@
 #define DUELCLIENT_H
 
 #include <vector>
+#include <deque>
+#include <string>
 #include "bufferio.h"
 #include "deck.h"
 #include "network.h"
 
 namespace ygo {
+
+// Recent incoming chat lines (server announcements, countdowns, room chat),
+// appended on STOC_CHAT by the network thread, read by MCP on the GUI thread
+// under mainGame->gMutex. Bounded ring buffer.
+extern std::deque<std::string> g_mcp_chat;
 
 #define CONNECT_STATE_NONE			0x0
 #define CONNECT_STATE_CONNECTING	0x1
@@ -39,6 +46,8 @@ public:
 	static void SendResponse();
 	static void SendUpdateDeck(const Deck& deck);
 	static void SendPacketToServer(unsigned char proto) {
+		if(std::getenv("YGOCLI_MCP_DEBUG"))
+			std::fprintf(stderr, "[ctos] type=%d\n", (int)proto);
 		auto p = duel_client_write;
 		BufferIO::Write<uint16_t>(p, 1);
 		BufferIO::Write<uint8_t>(p, proto);
@@ -46,6 +55,8 @@ public:
 	}
 	template<typename ST>
 	static void SendPacketToServer(unsigned char proto, const ST& st) {
+		if(std::getenv("YGOCLI_MCP_DEBUG"))
+			std::fprintf(stderr, "[ctos] type=%d\n", (int)proto);
 		auto p = duel_client_write;
 		static_assert(sizeof(ST) <= MAX_DATA_SIZE, "Packet size is too large.");
 		BufferIO::Write<uint16_t>(p, (uint16_t)(1 + sizeof(ST)));
@@ -54,6 +65,8 @@ public:
 		WriteBufferEvent(client_bev, duel_client_write, sizeof(ST) + 3);
 	}
 	static void SendBufferToServer(unsigned char proto, void* buffer, size_t len) {
+		if(std::getenv("YGOCLI_MCP_DEBUG"))
+			std::fprintf(stderr, "[ctos] type=%d\n", (int)proto);
 		auto p = duel_client_write;
 		if (len > MAX_DATA_SIZE)
 			len = MAX_DATA_SIZE;

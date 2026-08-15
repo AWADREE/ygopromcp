@@ -167,7 +167,13 @@ public:
 	void ShowCardInfoInList(ClientCard* pcard, irr::gui::IGUIElement* element, irr::gui::IGUIElement* parent);
 	void SetResponseSelectedCards() const;
 	void SetResponseSelectedOption() const;
+	// Game-owned response builders (single source of truth for the response
+	// byte formats; shared by the mouse handler and the MCP bridge):
+	void RespondZones();                                  // SELECT_PLACE/DISFIELD: pack selected_field as [player,loc,seq]
+	void RespondSortOrder(const std::vector<int>& order); // SORT: order[pos] = card index placed at final position pos
 	void CancelOrFinish();
+	void ToggleSelectCard(ClientCard* clicked_card);   // field-click card toggle (shared with MCP)
+	void ClickSelectCounter(ClientCard* clicked_card);  // field-click counter removal (shared with MCP)
 
 private:
 	std::vector<std::unique_ptr<ClientCard>> cards_;

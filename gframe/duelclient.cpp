@@ -4,6 +4,7 @@
 #include <random>
 #include "config.h"
 #include "duelclient.h"
+#include "mcp.h"
 #include "data_manager.h"
 #include "client_card.h"
 #include "materials.h"
@@ -18,6 +19,8 @@
 #include <event2/buffer.h>
 
 namespace ygo {
+
+std::deque<std::string> g_mcp_chat;   // recent incoming chat (see duelclient.h)
 
 namespace {
 	unsigned connect_state{ CONNECT_STATE_NONE };
@@ -282,6 +285,8 @@ void DuelClient::ClientThread() {
 void DuelClient::HandleSTOCPacketLan(unsigned char* data, size_t len) {
 	unsigned char* pdata = data;
 	unsigned char pktType = BufferIO::Read<uint8_t>(pdata);
+	if(std::getenv("YGOCLI_MCP_DEBUG"))
+		fprintf(stderr, "[stoc] type=%d len=%zu\n", (int)pktType, len);
 	switch(pktType) {
 	case STOC_GAME_MSG: {
 		if (len < 1 + sizeof(unsigned char))
@@ -367,6 +372,9 @@ void DuelClient::HandleSTOCPacketLan(unsigned char* data, size_t len) {
 			}
 			soundManager.PlaySoundEffect(SOUND_INFO);
 			mainGame->env->addMessageBox(L"", msgbuf);
+			// MCP: surface the deck-check popup text (the modal is invisible to
+			// the agent -- without this it would wait forever on a bad deck).
+			MCP_NotifyDeckError(msgbuf);
 			mainGame->cbCategorySelect->setEnabled(true);
 			mainGame->cbDeckSelect->setEnabled(true);
 			mainGame->gMutex.unlock();
@@ -884,6 +892,14 @@ void DuelClient::HandleSTOCPacketLan(unsigned char* data, size_t len) {
 		BufferIO::CopyCharArray(chat_msg, msg);
 		mainGame->gMutex.lock();
 		mainGame->AddChatMsg(msg, player, play_sound);
+		// MCP chat log (server announcements, countdowns, room chat)
+		{
+			char buf8[LEN_CHAT_MSG * 4];
+			BufferIO::EncodeUTF8(msg, buf8);
+			g_mcp_chat.push_back(std::string(buf8));
+			if (g_mcp_chat.size() > 64)
+				g_mcp_chat.pop_front();
+		}
 		mainGame->gMutex.unlock();
 		break;
 	}
@@ -1009,12 +1025,16 @@ void DuelClient::HandleSTOCPacketLan(unsigned char* data, size_t len) {
 		break;
 	}
 	}
+	// MCP inbound tap: publish the STOC sequence/op (network thread, no locks held).
+	MCP_NotifyStoc(pktType);
 }
 // Analyze STOC_GAME_MSG packet
 bool DuelClient::ClientAnalyze(unsigned char* msg, size_t len) {
 	unsigned char* pbuf = msg;
 	wchar_t textBuffer[256]{};
 	mainGame->dInfo.curMsg = BufferIO::Read<uint8_t>(pbuf);
+	// MCP inbound tap: raw MSG_* narration stream (network thread, before client parse).
+	MCP_NotifyGameMsg(msg, len);
 	if(mainGame->dInfo.curMsg != MSG_RETRY) {
 		std::memcpy(last_successful_msg, msg, len);
 		last_successful_msg_length = len;
