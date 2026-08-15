@@ -63,6 +63,7 @@ namespace {
 	}
 }
 
+unsigned GetConnectState() { return connect_state; }
 bufferevent* DuelClient::client_bev = 0;
 unsigned char DuelClient::duel_client_write[SIZE_NETWORK_BUFFER]{};
 unsigned char DuelClient::selftype = 0;
@@ -892,11 +893,20 @@ void DuelClient::HandleSTOCPacketLan(unsigned char* data, size_t len) {
 		BufferIO::CopyCharArray(chat_msg, msg);
 		mainGame->gMutex.lock();
 		mainGame->AddChatMsg(msg, player, play_sound);
-		// MCP chat log (server announcements, countdowns, room chat)
+		// MCP chat log (server announcements, countdowns, room chat):
+		// "<player>: <text>" so the bridge can emit "[chat] <player>: <text>".
 		{
 			char buf8[LEN_CHAT_MSG * 4];
 			BufferIO::EncodeUTF8(msg, buf8);
-			g_mcp_chat.push_back(std::string(buf8));
+			std::string who;
+			if (player == 8) who = "Server";              // system custom message
+			else if (player >= 4) who = "System";
+			else if (player == 0 || player == 1) {
+				char n8[128];
+				BufferIO::EncodeUTF8(player == 0 ? mainGame->dInfo.hostname : mainGame->dInfo.clientname, n8);
+				who = n8;
+			} else who = "P" + std::to_string(player);
+			g_mcp_chat.push_back(who + ": " + buf8);
 			if (g_mcp_chat.size() > 64)
 				g_mcp_chat.pop_front();
 		}

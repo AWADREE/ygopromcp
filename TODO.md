@@ -19,7 +19,7 @@ read directly from the core/script source. Unsure = plausible, needs a test.
 
 2. **The deck-check popup cannot be dismissed by MCP.**
    `STOC_ERROR_MSG`/`ERRMSG_DECKERROR` shows an irrlicht `env->addMessageBox`
-   modal (not `wMessage`). The MCP surfaces the text via `ygo_log`
+   modal (not `wMessage`). The MCP surfaces the text in the `# log` section
    (`[!] deck rejected: ...`), but there is no way for the agent to click the
    box's OK — it stays on screen (harmless to the bridge, but the agent must
    give up / switch decks). A future `ygo_dismiss`-style action that finds the
@@ -36,23 +36,22 @@ read directly from the core/script source. Unsure = plausible, needs a test.
    are filtered out of the option list like the game's button handler — if a
    card offers both an operation and a reset, the reset branch is not offered.
 
-5. **`-1`/`-2` in `ygo_choose` are legacy aliases** (box ack / pass / finish),
-   accepted for old agents and the test watchdog, but never printed by the
-   bridge. The `0. cancel ready` lobby flow in the random test sends `-1`,
-   which is a no-op pre-duel (the client stays ready — harmless).
+5. **`ygo_choose` ids are 0-based only** (`int` or `list[int]`); negative ids
+   are rejected. Legacy `-1`/`-2` aliases are gone. A cancelable prompt is
+   canceled with an empty `id=[]` (rendered as `min=0`).
 
 6. **ygopro v1 leaks opponent draw codes** in the `MSG_DRAW` payload. The
    bridge deliberately logs opponent draws as count-only and the state shows
    the opponent hand as a face-down count. The codes are still in the client's
    memory — if a stricter policy is wanted, the tap could strip them too.
 
-7. **`ygo_chatlog` is empty in srvpro password rooms** unless
+7. **Incoming chat may be empty in srvpro password rooms** unless
    `mycard.enabled=true` (server policy drops player chat there). Use random
    duel rooms (`S`/`M`/`T`) if chat must be tested.
 
-8. **The `-d` launch flag needs the extensionless deck name** — the client
-   matches `lastdeck` against the deck-combo item (which is the filename minus
-   `.ydk`). `-d example.ydk` only works because `example` is the default deck.
+8. **`ygo_connect` takes a full deck path** (`deck` argument) and loads it via
+   `deckManager.LoadCurrentDeck` — the old extensionless `-d` name matching no
+   longer applies.
 
 9. **MCP_Poll defers while `fadingList` is non-empty** (the game drops clicks
    during fades). Long animation sequences can delay a request up to the 30s
@@ -61,13 +60,13 @@ read directly from the core/script source. Unsure = plausible, needs a test.
 ## Unsure (need testing, not done)
 
 1. **Replay mode** — the taps fire for replay playback too (`ClientAnalyze` is
-   shared), so `ygo_log`/`ygo_state` narrate replays. Never tested.
+   shared), so the bridge narrates replays. Never tested.
 2. **Tag duels** — `MCP_MeOpp` assumes `selftype < 2`; tag (0-3) player naming
    and the field render are unverified.
 3. **Match (BO3) flow** — after game 1 the client enters the deck-builder
    siding UI, which the MCP cannot drive. With srvpro `reconnect` disabled
    (this fork's config), verify how a match-mode room behaves after a game.
-4. **`YGOCLI_EXPLAIN_ROUNDS`** semantics ("round" = a `ygo_log` call) are
+4. **`YGOCLI_EXPLAIN_ROUNDS`** semantics ("round" = a tool response round) are
    implemented but not explicitly verified.
 5. **`ygo_card` name lookup** is substring-based over the loaded card table —
    ambiguous names can return multiple/wrong cards; numeric codes are exact.

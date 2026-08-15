@@ -14,6 +14,7 @@ namespace ygo {
 // appended on STOC_CHAT by the network thread, read by MCP on the GUI thread
 // under mainGame->gMutex. Bounded ring buffer.
 extern std::deque<std::string> g_mcp_chat;
+unsigned GetConnectState();   // MCP: connection state (connect_state is file-local)
 
 #define CONNECT_STATE_NONE			0x0
 #define CONNECT_STATE_CONNECTING	0x1

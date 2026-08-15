@@ -17,35 +17,46 @@ the game through the same event receivers a human click uses.
 
 ## What it does
 
-The client connects to a YGOPro server (e.g. [srvpro](https://github.com/mycard/srvpro)),
-joins a room, and an agent drives it tool-by-tool:
+The bridge is **always on** (no `--mcp` flag, no CLI join flags). Launch the
+client, then drive it tool-by-tool:
 
-| Tool | Purpose |
-|---|---|
-| `ygo_state` | Board snapshot + pending prompt, **uniform** `Option N~M/TOTAL:` header + numbered options |
-| `ygo_choose` | Answer a prompt: pick `k = randint(N, M)` option ids from `0..TOTAL-1` via `indices` |
-| `ygo_log` | Drained narration: turns, phases, draws, summons, attacks, activations, chains, discards, LP events + one-line `[Card]` explains |
-| `ygo_card` | Explain a card on one line (ydkshow-style) by name or code |
-| `ygo_chat` / `ygo_chatlog` | Send / receive room chat (incl. server announcements) |
-| `ygo_surrender` / `ygo_disconnect` | End the duel / leave the room |
+| Tool | Purpose | Blocks? |
+|---|---|---|
+| `ygo_connect` | Join a room (nickname, host, port, password, deck path), auto-ready, poll start if host; returns at the first decision point | YES |
+| `ygo_choose` | Answer the pending prompt (`id` = int **or** list of ints) and block until the next decision point | YES |
+| `ygo_card` | Explain a card on one line (ydkshow-style) by name or code | no |
+| `ygo_chat` | Send a chat message to the room | no |
+| `ygo_surrender` | Surrender the duel (blocks until the server responds) | YES |
+| `ygo_disconnect` | Leave the room (immediate) | no |
 
-Every prompt is rendered the same way:
+Every blocking response is one **text block**:
 
 ```
-Option 2~3/6:
-0. Card A (Lv4) @Hand[0]
-1. Card B (Lv4) @Hand[1]
-2. Card C (Lv4) @Hand[2]
-3. Card D (Lv4) @Hand[3]
-4. Card E (Lv4) @Hand[4]
+# log
+<recent narration, terse>
+
+# state
+<board as a 5×5 markdown table + fzone column>
+
+# card explain
+<one-line explains for cards mentioned but not explained for N turns>
+
+# options: min~max/total
+0. <option>
+1. <option>
+...
 ```
+
+The `# options` section is present only when the agent must decide. Option ids
+are 0-based; pick a subset of size `k` in `[min,max]` (a list `id`), or one
+option (an int `id`). A cancelable prompt renders as `min=0` and an **empty**
+`id=[]` cancels it. A prompt with exactly one way to answer (`min~max/1`) is
+auto-answered by the bridge and never reaches the agent.
 
 The agent never needs game logic: read the header, pick a random (or computed)
-subset, send `indices`. Cancel is never an option — a cancelable prompt is
-presented as `min=0` and an **empty** `indices=[]` cancels. Invalid choices are
-not offered: level-sum (synchro) selects enumerate only valid combinations, and
-single-card selects (`MSG_SELECT_UNSELECT_CARD`, used by custom XYZ procedures)
-always respond with exactly one card.
+subset, send `id`. Invalid choices are not offered: level-sum (synchro) selects
+enumerate only valid combinations, and single-card selects
+(`MSG_SELECT_UNSELECT_CARD`) always respond with exactly one card.
 
 The bridge is deliberately dumb about the *client*: choices come from the
 game's own parsed state, responses go through the game's own builders
@@ -74,20 +85,14 @@ make -C build config=release -j$(nproc)
 
 ## Running
 
-```bash
-bin/release/YGOPro --mcp -k -n MyName \
-  -h 127.0.0.1 -p 7911 -w RoomName -d MyDeck -j
-```
+Launch the client (no flags needed — the MCP stdio server takes over stdout,
+app output goes to stderr), then call `ygo_connect`:
 
-| Flag | Meaning |
-|---|---|
-| `--mcp` | enable the MCP stdio server (takes over stdout; app output goes to stderr) |
-| `-k` | keep the client open after a match |
-| `-n` | player name |
-| `-h` / `-p` | server host / port (default 7911) |
-| `-w` | room password (room is created if absent; **rooms persist by name** — use fresh names) |
-| `-d` | deck **name without the `.ydk` extension** (the client matches the deck list item) |
-| `-j` | auto-join and go straight to the lobby |
+```json
+{ "method": "tools/call", "params": { "name": "ygo_connect",
+  "arguments": { "host": "127.0.0.1", "port": "7911", "password": "RoomName",
+                 "name": "MyName", "deck": "/path/to/deck.ydk" } } }
+```
 
 Requires a YGOPro server (e.g. srvpro) on the target host. In a password room
 the duel starts when the host clicks start; `system.conf` in this fork sets
@@ -104,10 +109,7 @@ MCP stdio client config (`.mcp.json`):
     "ygopromcp": {
       "type": "stdio",
       "command": "/abs/path/to/YGOPro",
-      "args": [
-        "--mcp", "-k", "-n", "agent", "-h", "127.0.0.1", "-p", "7911",
-        "-w", "room1", "-d", "example", "-j"
-      ]
+      "args": []
     }
   }
 }
@@ -115,11 +117,10 @@ MCP stdio client config (`.mcp.json`):
 
 Agent loop (the entire strategy):
 
-1. `ygo_state` → parse the `Option N~M/TOTAL:` header.
-2. Decide `k = randint(N, M)` and pick `k` distinct option ids — or compute a
-   real play from the board text + `ygo_card` explains.
-3. `ygo_choose {"indices": [ids]}` (a single option may use `{"id": N}`).
-4. Drain `ygo_log` for the narration; repeat.
+1. `ygo_connect` → blocks until the first decision (RPS / turn order / prompt).
+2. Parse the `# options: min~max/total` header in the text block.
+3. `ygo_choose {"id": <int or list of ints>}` → blocks until the next decision.
+4. Repeat until `Game Over` appears in the block.
 
 Wire protocol: newline-delimited JSON-RPC 2.0 on stdin/stdout, with
 `initialize` → `tools/list` → `tools/call` (standard MCP stdio handshake).
@@ -128,24 +129,25 @@ Wire protocol: newline-delimited JSON-RPC 2.0 on stdin/stdout, with
 ## Testing
 
 ```bash
-# start a server first, then (from ygocli/tests):
+# start a server first, then (from tests/):
 python3 tests/fork_aggro_play.py <room-name> <deck.ydk>
 ```
 
-A pure-random agent plays full games against itself through the bridge; the
-test passes when turns advance, LP moves and no deadlock/watchdog fires. A
-per-run transcript is written to `/tmp/mcp_transcript.log` (every state read
-and choose result, with timestamps).
+A pure-random agent plays full games against itself through the bridge
+(entry via `ygo_connect`); the test passes when turns advance and the game
+reaches a natural `Game Over` or the run-time cap without deadlock. A per-run
+transcript is written to `/tmp/mcp_transcript.log` (every send/receive with
+timestamps).
 
 ## Caveats
 
-- The bridge drives **network play only** (lobby → RPS → turn order → duel).
-  Deck building, single-player and replay modes are out of scope; replay
+- The bridge drives **network play only** (connect → lobby → RPS → turn order →
+  duel). Deck building, single-player and replay modes are out of scope; replay
   playback narrates the log but is untested.
 - Tag duels and match (BO3) siding are unverified.
 - A deck rejected by the server shows a modal popup the agent cannot click;
-  the reason is surfaced in `ygo_log` as `[!] deck rejected: ...` — switch
-  decks rather than waiting.
+  the reason is surfaced in the `# log` section as `[!] deck rejected: ...` —
+  switch decks rather than waiting.
 - Constrained combo selects (tribute etc.) can still be rejected by the core;
   the retry flow re-prompts, and the test watchdog surrenders unsolvable ones.
 - Opponent hand contents and draw names are never exposed (count-only), even

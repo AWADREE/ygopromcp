@@ -51,17 +51,10 @@ static int mymain(int wargc, const wchar_t* const wargv[]) {
 	evthread_use_pthreads();
 	signal(SIGCHLD, SIG_IGN);
 #endif //_WIN32
-	// MCP mode must own stdout from the very start (before Initialize prints
-	// the irrlicht banner), so the JSON-RPC channel never sees app output.
-	bool mcp_mode = false;
-	for(int i = 1; i < wargc; ++i) {
-		if(!std::wcscmp(wargv[i], L"--mcp")) {
-			mcp_mode = true;
-			break;
-		}
-	}
-	if(mcp_mode)
-		ygo::MCP_Init();
+	// The MCP bridge owns stdout from the very start (before Initialize
+	// prints the irrlicht banner), so the JSON-RPC channel never sees app
+	// output. Always on; no flags.
+	ygo::MCP_Init();
 
 	ygo::Game _game;
 	ygo::mainGame = &_game;
@@ -190,8 +183,7 @@ static int mymain(int wargc, const wchar_t* const wargv[]) {
 		}
 	}
 	ygo::mainGame->MainLoop();
-	if(mcp_mode)
-		ygo::MCP_Shutdown();
+	ygo::MCP_Shutdown();
 #ifdef _WIN32
 	WSACleanup();
 #else
