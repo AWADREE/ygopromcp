@@ -2186,12 +2186,24 @@ static json ToolSchema(const char* name, const char* desc, json props) {
 static std::string MCP_Execute(MCPJob* job) {
     if (job->method == "initialize") {
         job->ok = true;
-        job->result = {{"protocolVersion", "2024-11-05"}, {"capabilities", json::object()}};
+        // serverInfo is REQUIRED by the MCP SDK's InitializeResultSchema; the
+        // tools capability must be advertised or listTools() returns empty.
+        job->result = {{"protocolVersion", "2024-11-05"},
+                       {"capabilities", {{"tools", json::object()}}},
+                       {"serverInfo", {{"name", "ygopro-mcp"}, {"version", "1.0.0"}}}};
+        return "";
+    }
+    if (job->method == "ping") {
+        job->ok = true;
+        job->result = json::object();
         return "";
     }
     if (job->method == "tools/list") {
         json props;
-        props["id"] = {{"type", "integer"}, {"description", "an option id (int) or a list of option ids (subset); ids always start at 0"}};
+        json id_prop;
+        id_prop["oneOf"] = json::array({json{{"type", "integer"}}, json{{"type", "array"}, {"items", json{{"type", "integer"}}}}});
+        id_prop["description"] = "an option id (int) or a list of option ids (subset); ids always start at 0";
+        props["id"] = id_prop;
         json tools = json::array();
         tools.push_back(ToolSchema("ygo_connect", "Connect to a room and block until the first decision point (RPS/turn order/prompt) or a failure. Joins, uploads the deck, readies, and polls the start button (if host) automatically.", {{"host", {{"type", "string"}}}, {"port", {{"type", "string"}}}, {"password", {{"type", "string"}}}, {"name", {{"type", "string"}, {"description", "nickname (optional)"}}}, {"deck", {{"type", "string"}, {"description", "deck file path"}}}}));
         tools.push_back(ToolSchema("ygo_choose", "Answer the pending prompt and block until the next decision point. id = int (single option) or list of ints (subset), per the '# options: min~max/total' section. Prompts with exactly one way to answer are auto-answered and never reach you.", props));
