@@ -1,6 +1,28 @@
 [submodule "ocgcore"]
 	path = ocgcore
-	url = https://github.com/Fluorohydride/ygopro-core.git
+	url = https://github.com/Fluorohydride/ygopro-core
+	pushUrl = git@github.com:Fluorohydride/ygopro-core
 [submodule "script"]
 	path = script
-	url = https://github.com/Fluorohydride/ygopro-scripts.git
+	url = https://github.com/Fluorohydride/ygopro-scripts
+	pushUrl = git@github.com:Fluorohydride/ygopro-scripts
+[submodule "vendor/claude-video"]
+	path = vendor/claude-video
+	url = https://github.com/bradautomates/claude-video
+	pushUrl = git@github.com:bradautomates/claude-video
+[submodule "vendor/ygocli"]
+	path = vendor/ygocli
+	url = https://github.com/zisisnotzis/ygocli
+	pushUrl = git@github.com:zisisnotzis/ygocli
+[submodule "vendor/srvpro"]
+	path = vendor/srvpro
+	url = https://github.com/mycard/srvpro
+	pushUrl = git@github.com:mycard/srvpro
+[submodule ".agents/skills/ygoskill"]
+	path = .agents/skills/ygoskill
+	url = https://github.com/zisisnotzis/ygoskill
+	pushUrl = git@github.com:zisisnotzis/ygoskill
+
+[submodule "vendor/irrlicht"]
+	path = vendor/irrlicht
+	url = https://github.com/mercury233/irrlicht.git
