@@ -126,6 +126,15 @@ Wire protocol: newline-delimited JSON-RPC 2.0 on stdin/stdout, with
 `initialize` → `tools/list` → `tools/call` (standard MCP stdio handshake).
 `YGOCLI_MCP_DEBUG=1` prints `[mcp]`/`[stoc]`/`[ctos]` traces to stderr.
 
+The graphical deck editor also has local MCP controls. `ygo_deck_list` lists
+available local decks, and `ygo_deck_open {"deck":"name","category":"local"}`
+loads one into the visible editor. `ygo_deck_search {"query":"text"}` uses the
+editor search. `ygo_deck_add` and `ygo_deck_remove` accept a numeric `code`, a
+`main`, `extra`, or `side` section, and an optional count from 1 to 3.
+`ygo_deck_save` saves only the currently selected existing local deck. Deck
+switching refuses unsaved edits, and editor card, section, alias, and limit
+rules also apply to MCP edits. These tools do not join a room.
+
 ## Testing
 
 ```bash
@@ -141,9 +150,10 @@ timestamps).
 
 ## Caveats
 
-- The bridge drives **network play only** (connect → lobby → RPS → turn order →
-  duel). Deck building, single-player and replay modes are out of scope; replay
-  playback narrates the log but is untested.
+- The duel bridge drives network play (connect → lobby → RPS → turn order →
+  duel). The separate deck tools use the graphical editor; single-player and
+  replay controls remain out of scope. Replay playback narrates the log but is
+  untested.
 - Tag duels and match (BO3) siding are unverified.
 - A deck rejected by the server shows a modal popup the agent cannot click;
   the reason is surfaced in the `# log` section as `[!] deck rejected: ...` —

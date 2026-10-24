@@ -1832,6 +1832,9 @@ void DeckBuilder::pop_side(int seq) {
 	GetHoveredCard();
 }
 bool DeckBuilder::check_limit(const CardDataC* pointer) {
+	return available_copies(pointer) > 0;
+}
+int DeckBuilder::available_copies(const CardDataC* pointer) const {
 	auto limitcode = pointer->get_duel_code();
 	int limit = 3;
 	auto flit = filterList->content.find(limitcode);
@@ -1849,6 +1852,6 @@ bool DeckBuilder::check_limit(const CardDataC* pointer) {
 		if (card->get_duel_code() == limitcode)
 			limit--;
 	}
-	return limit > 0;
+	return limit;
 }
 }
