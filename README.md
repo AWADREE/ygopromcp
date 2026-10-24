@@ -139,6 +139,19 @@ reaches a natural `Game Over` or the run-time cap without deadlock. A per-run
 transcript is written to `/tmp/mcp_transcript.log` (every send/receive with
 timestamps).
 
+The offline recipient-visibility check runs the graphical client against a
+loopback-only fixture and a temporary local card database:
+
+```bash
+python3 tests/visibility_recipient_smoke.py --exe /path/to/YGOPro \
+  --assets . --scratch-dir /path/to/temporary-directory
+```
+
+The scratch directory must already exist. On Windows, pass `--dll-dir` if the
+client's runtime DLL directory is not already on `PATH`. The fixture checks
+the client view of visibility-filtered recipient packets; it does not test the
+server's filtering implementation.
+
 ## Caveats
 
 - The bridge drives **network play only** (connect → lobby → RPS → turn order →
@@ -150,8 +163,12 @@ timestamps).
   switch decks rather than waiting.
 - Constrained combo selects (tribute etc.) can still be rejected by the core;
   the retry flow re-prompts, and the test watchdog surrenders unsolvable ones.
-- Opponent hand contents and draw names are never exposed (count-only), even
-  though the ygopro v1 protocol leaks draw codes to the client.
+- Hidden opponent hand cards and ordinary draw identities are masked in the
+  network recipient view. Cards explicitly revealed by a public draw or card
+  confirmation can be named while their identity remains trackable. Hand
+  shuffles and hidden-zone refreshes can clear that name; a move into the
+  opponent's face-down deck is followed by such a refresh. Face-down banished
+  cards stay unnamed.
 - See [TODO.md](TODO.md) for the full list of known and suspected issues.
 
 ## Credits
