@@ -32,8 +32,12 @@ void MCP_Poll();
 
 // ---- inbound taps (called on the NETWORK thread; publish only) ----
 // Fires at the end of DuelClient::HandleSTOCPacketLan's switch for every
-// well-formed STOC packet (GAME_MSG included - ClientAnalyze already ran).
-void MCP_NotifyStoc(unsigned char pktType);
+// well-formed STOC packet. Only completed decision messages advance the
+// generation; ClientAnalyze has already parsed their GUI choice state.
+void MCP_NotifyStoc(unsigned char pktType, unsigned char gameMsgType);
+// MSG_CONFIRM_CARDS can wait inside ClientAnalyze for a panel OK before the
+// outer STOC callback returns. Publish that decision after the panel is ready.
+void MCP_NotifyConfirmPanelReady();
 // Fires at the top of DuelClient::ClientAnalyze with the raw MSG_* payload.
 // Parses the display/event subset for the narration log. Must never block.
 void MCP_NotifyGameMsg(const unsigned char* msg, size_t len);

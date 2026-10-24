@@ -245,7 +245,10 @@ static std::string U8(const wchar_t* w);
 static const char* MCP_PhaseShort(uint16_t ph);
 static const char* MCP_EffectType(uint32_t code);
 
-static std::atomic<uint64_t> g_stoc_seq{ 0 };    // monotonic STOC counter
+// Advance only for actual decision prompts. A non-prompt game update can
+// arrive before the next decision and must not re-expose the previous one.
+static std::atomic<uint64_t> g_stoc_seq{ 0 };    // monotonic prompt counter
+static bool MCP_IsPrompt(short curMsg);
 static std::atomic<uint16_t> g_phase{ 0 };       // current phase (from MSG_NEW_PHASE)
 static std::atomic<int> g_cur_turn_player{ 0 };  // current turn player, local view (from MSG_NEW_TURN)
 static uint32_t g_last_summon_code = 0;          // card code from the last SUMMONING family (for SUMMONED lines)
@@ -282,10 +285,31 @@ static void MCP_Mention(uint32_t code) {
     g_mentioned.insert(code & 0x7fffffff);
 }
 
-void MCP_NotifyStoc(unsigned char pktType) {
-    g_stoc_seq.fetch_add(1, std::memory_order_relaxed);
+void MCP_NotifyStoc(unsigned char pktType, unsigned char gameMsgType) {
+    if (pktType == STOC_GAME_MSG) {
+        // RETRY has already reparsed the rejected prompt by the time this
+        // outer callback returns. CONFIRM_CARDS publishes before its panel
+        // wait instead; publishing here as well would duplicate it.
+        const bool prompt = gameMsgType == MSG_RETRY
+            ? mainGame && MCP_IsPrompt(mainGame->dInfo.curMsg)
+            : gameMsgType != MSG_CONFIRM_CARDS && MCP_IsPrompt(gameMsgType);
+        const uint64_t seq = prompt
+            ? g_stoc_seq.fetch_add(1, std::memory_order_relaxed) + 1
+            : g_stoc_seq.load(std::memory_order_relaxed);
+        if (std::getenv("YGOCLI_MCP_DEBUG"))
+            fprintf(stderr, "[mcp-prompt] received msg=%u prompt=%d generation=%llu\n",
+                    (unsigned)gameMsgType, prompt ? 1 : 0,
+                    (unsigned long long)seq);
+    }
     if (pktType == STOC_DUEL_END)
         MCP_Log("[!] game over — OK required");
+}
+
+void MCP_NotifyConfirmPanelReady() {
+    const uint64_t seq = g_stoc_seq.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (std::getenv("YGOCLI_MCP_DEBUG"))
+        fprintf(stderr, "[mcp-prompt] confirm panel ready generation=%llu\n",
+                (unsigned long long)seq);
 }
 
 // The server rejected a deck (lflist/rule/count) and the client showed the
@@ -1401,8 +1425,8 @@ static int MCP_ExplainRounds() {
     return n >= 1 ? n : 1;
 }
 
-// STOC seq at which the agent last acted (ygo_choose). The text block shows
-// a prompt only when seq != last_acted (i.e. a fresh message arrived).
+// Prompt generation at which the agent last acted (ygo_choose). The text block
+// shows a prompt only when a fresh decision message has arrived.
 static std::atomic<uint64_t> g_last_acted_seq{ 0 };
 static int g_detail_round = 0;                              // ygo_log read counter
 static std::unordered_map<uint32_t, int> g_last_detail;     // code -> round explained
@@ -1641,8 +1665,8 @@ static std::string MCP_ChoicesText() {
         // seq gate does not apply -- window-driven, render unconditionally.
         choices = MCP_OptionsText();
     } else if (MCP_IsPrompt(g->dInfo.curMsg)) {
-        // seq gate: curMsg stays at the last prompt type after answering
-        // until the next message; show the prompt only for a fresh instance.
+        // Generation gate: curMsg stays at the last prompt type after answering
+        // until the next message; show it only for a fresh decision instance.
         uint64_t seq = g_stoc_seq.load(std::memory_order_relaxed);
         bool acted = (seq == g_last_acted_seq.load(std::memory_order_relaxed));
         if (!acted) choices = MCP_PromptText(g->dInfo.curMsg);
@@ -1992,8 +2016,13 @@ static std::string MCP_DoChoose(const json& args) {
     bool retry_box = mainGame->wMessage && mainGame->wMessage->isVisible()
         && mainGame->dInfo.curMsg == MSG_RETRY;
     auto mark_acted = [&]() {
-        if (!retry_box)
-            g_last_acted_seq.store(g_stoc_seq.load(std::memory_order_relaxed));
+        if (!retry_box) {
+            const uint64_t seq = g_stoc_seq.load(std::memory_order_relaxed);
+            g_last_acted_seq.store(seq, std::memory_order_relaxed);
+            if (std::getenv("YGOCLI_MCP_DEBUG"))
+                fprintf(stderr, "[mcp-prompt] acted msg=%d generation=%llu\n",
+                        (int)mainGame->dInfo.curMsg, (unsigned long long)seq);
+        }
     };
 
     auto& f = mainGame->dField;
@@ -2837,6 +2866,11 @@ void MCP_Poll() {
             g_connect_readied = false;
         }
         if (MCP_DecisionPending() || back_to_menu) {
+            if (std::getenv("YGOCLI_MCP_DEBUG"))
+                fprintf(stderr, "[mcp-prompt] delivered msg=%d generation=%llu acted=%llu\n",
+                        mainGame ? (int)mainGame->dInfo.curMsg : -1,
+                        (unsigned long long)g_stoc_seq.load(std::memory_order_relaxed),
+                        (unsigned long long)g_last_acted_seq.load(std::memory_order_relaxed));
             MCP_CompleteJob(g_active_job, MCP_BlockText());
             g_active_job = nullptr;
         }

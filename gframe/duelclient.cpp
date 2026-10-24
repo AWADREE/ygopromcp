@@ -1083,8 +1083,8 @@ void DuelClient::HandleSTOCPacketLan(unsigned char* data, size_t len) {
 		break;
 	}
 	}
-	// MCP inbound tap: publish the STOC sequence/op (network thread, no locks held).
-	MCP_NotifyStoc(pktType);
+	// MCP inbound tap: publish completed decision messages (network thread, no locks held).
+	MCP_NotifyStoc(pktType, pktType == STOC_GAME_MSG ? data[1] : 0);
 }
 // Analyze STOC_GAME_MSG packet
 bool DuelClient::ClientAnalyze(unsigned char* msg, size_t len) {
@@ -2387,6 +2387,7 @@ bool DuelClient::ClientAnalyze(unsigned char* msg, size_t len) {
 			mainGame->dField.ShowSelectCard(true);
 			mainGame->gMutex.unlock();
 			mainGame->actionSignal.Reset();
+			MCP_NotifyConfirmPanelReady();
 			mainGame->actionSignal.Wait();
 		}
 		return true;
