@@ -72,6 +72,7 @@
 #include "data_manager.h"
 #include "deck_manager.h"
 #include "bufferio.h"
+#include "mcp_stdio.h"
 
 #include <nlohmann/json.hpp>
 
@@ -87,12 +88,15 @@
 #include <atomic>
 #include <sstream>
 #include <thread>
+#include <future>
 #include <mutex>
 #include <condition_variable>
 #include <chrono>
 #include <algorithm>
 #include <cctype>
-#include <unistd.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include <IEventReceiver.h>
 
 // globals owned by other translation units, used by the bridge
@@ -121,9 +125,12 @@ struct MCPJob {
     std::condition_variable cv;
 };
 
-static int g_json_fd = -1;
-static bool g_running = false;
+static MCPStdio g_stdio;
+static std::atomic<bool> g_running{ false };
 static std::thread g_thread;
+#ifdef _WIN32
+static HANDLE g_reader_handle = nullptr;
+#endif
 static std::mutex g_qmtx;
 static std::deque<MCPJob*> g_queue;
 
@@ -145,61 +152,73 @@ static MCPJob* MCP_PopJob() {
     return job;
 }
 
+static void MCP_HandleLine(const std::string& line) {
+    if (line.empty()) return;
+    json req;
+    try {
+        req = json::parse(line);
+    } catch (...) {
+        return;
+    }
+    if (!req.is_object() || !req.contains("id")) { dbg("reader: bad req"); return; }
+    dbg("reader: got request");
+    auto* job = new MCPJob;
+    job->id = req.value("id", 0);
+    job->method = req.value("method", "");
+    if (req.contains("params")) job->params = req["params"];
+    // blocking tools (coroutine): the response waits for a decision point
+    if (job->method == "tools/call" && job->params.contains("name")) {
+        std::string n = job->params.value("name", "");
+        if (MCP_IsBlockingTool(n))
+            job->blocking = true;
+    }
+    {
+        std::lock_guard<std::mutex> lk(g_qmtx);
+        g_queue.push_back(job);
+    }
+    {
+        // Blocking calls (coroutine model) wait until the GUI thread
+        // completes them at the next decision point -- NO timeout.
+        // Non-blocking calls keep the 30 s safety cap.
+        std::unique_lock<std::mutex> lk(job->mtx);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+        while (!job->done && g_running && (job->blocking || std::chrono::steady_clock::now() < deadline))
+            job->cv.wait_for(lk, std::chrono::milliseconds(25));
+    }
+    json resp;
+    resp["jsonrpc"] = "2.0";
+    resp["id"] = job->id;
+    if (job->ok) {
+        resp["result"] = job->result;
+    } else {
+        resp["error"] = {{"code", -32603}, {"message", job->error_msg.empty() ? "internal error" : job->error_msg}};
+    }
+    if (g_running)
+        g_stdio.Write(resp.dump() + "\n");
+    {
+        std::lock_guard<std::mutex> lk(g_qmtx);
+        auto queued = std::find(g_queue.begin(), g_queue.end(), job);
+        if (queued != g_queue.end()) g_queue.erase(queued);
+    }
+    delete job;
+}
+
 static void MCP_ReaderThread() {
-    std::string line;
-    while (g_running && std::getline(std::cin, line)) {
-        if (line.empty()) continue;
-        json req;
-        try {
-            req = json::parse(line);
-        } catch (...) {
+    std::string pending;
+    char buffer[4096];
+    while (g_running) {
+        const auto newline = pending.find('\n');
+        if (newline != std::string::npos) {
+            const std::string line = pending.substr(0, newline);
+            pending.erase(0, newline + 1);
+            if (!line.empty()) MCP_HandleLine(line);
             continue;
         }
-        if (!req.is_object() || !req.contains("id")) { dbg("reader: bad req"); continue; }
-        dbg("reader: got request");
-        auto* job = new MCPJob;
-        job->id = req.value("id", 0);
-        job->method = req.value("method", "");
-        if (req.contains("params")) job->params = req["params"];
-        // blocking tools (coroutine): the response waits for a decision point
-        if (job->method == "tools/call" && job->params.contains("name")) {
-            std::string n = job->params.value("name", "");
-            if (MCP_IsBlockingTool(n))
-                job->blocking = true;
-        }
-        {
-            std::lock_guard<std::mutex> lk(g_qmtx);
-            g_queue.push_back(job);
-        }
-        {
-            // Blocking calls (coroutine model) wait until the GUI thread
-            // completes them at the next decision point -- NO timeout.
-            // Non-blocking calls keep the 30 s safety cap.
-            std::unique_lock<std::mutex> lk(job->mtx);
-            if (job->blocking)
-                job->cv.wait(lk, [&] { return job->done || !g_running; });
-            else
-                job->cv.wait_for(lk, std::chrono::seconds(30), [&] { return job->done; });
-        }
-        json resp;
-        resp["jsonrpc"] = "2.0";
-        resp["id"] = job->id;
-        if (job->ok) {
-            resp["result"] = job->result;
-        } else {
-            resp["error"] = {{"code", -32603}, {"message", job->error_msg.empty() ? "internal error" : job->error_msg}};
-        }
-        std::string out = resp.dump() + "\n";
-        if (g_json_fd >= 0) {
-            ssize_t off = 0;
-            while (off < (ssize_t)out.size()) {
-                ssize_t n = ::write(g_json_fd, out.data() + off, out.size() - off);
-                if (n <= 0) break;
-                off += n;
-            }
-        }
-        delete job;
+        const int count = g_stdio.Read(buffer, sizeof(buffer));
+        if (count < 0) break;
+        if (count > 0) pending.append(buffer, static_cast<size_t>(count));
     }
+    g_running = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -2298,30 +2317,72 @@ static std::string MCP_Execute(MCPJob* job) {
 void MCP_Init() {
     if (g_running) return;
     // The MCP channel owns the real stdout; the app's own output goes to stderr.
-    g_json_fd = ::dup(STDOUT_FILENO);
-    if (g_json_fd < 0) return;
-    if (::freopen("/dev/stderr", "w", stdout) == nullptr) {
-        // fall back: keep stdout for the app (MCP will be unusable)
-        ::close(g_json_fd);
-        g_json_fd = -1;
-        return;
-    }
+    if (!g_stdio.Start()) return;
+#ifndef _WIN32
     std::signal(SIGPIPE, SIG_IGN);
+#endif
     g_running = true;
     dbg("init: starting reader thread");
+#ifdef _WIN32
+    std::promise<HANDLE> reader_ready;
+    auto reader_handle = reader_ready.get_future();
+    g_thread = std::thread([&reader_ready] {
+        HANDLE owned = nullptr;
+        if (!DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
+                             &owned, 0, FALSE, DUPLICATE_SAME_ACCESS))
+            std::fprintf(stderr, "MCP: could not retain reader thread handle: %lu\n", GetLastError());
+        reader_ready.set_value(owned);
+        if (owned) MCP_ReaderThread();
+    });
+    g_reader_handle = reader_handle.get();
+    if (!g_reader_handle) {
+        g_running = false;
+        g_thread.join();
+        g_stdio.Stop();
+    }
+#else
     g_thread = std::thread(MCP_ReaderThread);
+#endif
 }
 
 void MCP_Shutdown() {
     g_running = false;
-    if (g_thread.joinable()) g_thread.join();
-    if (g_json_fd >= 0) {
-        ::close(g_json_fd);
-        g_json_fd = -1;
+    if (g_thread.joinable()) {
+#ifdef _WIN32
+        // The reader duplicated its own real Win32 HANDLE at startup, so it
+        // remains valid even if the std::thread's native identifier expires.
+        if (g_reader_handle) {
+            for (;;) {
+                const DWORD wait = WaitForSingleObject(g_reader_handle, 25);
+                if (wait == WAIT_OBJECT_0) break;
+                if (wait == WAIT_TIMEOUT) {
+                    if (!CancelSynchronousIo(g_reader_handle)) {
+                        const DWORD error = GetLastError();
+                        // No I/O may be pending between reads/writes. Keep
+                        // watching: a racing operation may start afterward.
+                        if (error != ERROR_NOT_FOUND)
+                            std::fprintf(stderr, "MCP: CancelSynchronousIo failed: %lu\n", error);
+                    }
+                    continue;
+                }
+                std::fprintf(stderr, "MCP: WaitForSingleObject failed: %lu\n", GetLastError());
+                break;
+            }
+        }
+#endif
+        g_thread.join();
+#ifdef _WIN32
+        if (g_reader_handle) CloseHandle(g_reader_handle);
+        g_reader_handle = nullptr;
+#endif
     }
+    g_queue.clear();
+    g_active_job = nullptr;
+    g_stdio.Stop();
 }
 
 void MCP_Poll() {
+    if (!g_running) return;
     dbg("poll called");
     // The GUI event receiver drops button events while a fade animation is
     // running (ClientField::OnEvent: if(fadingList.size()) break). Defer the

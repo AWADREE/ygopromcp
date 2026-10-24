@@ -58,8 +58,13 @@ static int mymain(int wargc, const wchar_t* const wargv[]) {
 
 	ygo::Game _game;
 	ygo::mainGame = &_game;
-	if(!ygo::mainGame->Initialize())
+	if(!ygo::mainGame->Initialize()) {
+		ygo::MCP_Shutdown();
+#ifdef _WIN32
+		WSACleanup();
+#endif
 		return EXIT_FAILURE;
+	}
 
 	bool keep_on_return = false;
 	bool deckCategorySpecified = false;

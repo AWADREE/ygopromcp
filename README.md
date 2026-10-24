@@ -72,7 +72,7 @@ Prerequisites (Linux; the fork builds with the same toolchain as upstream):
 - [premake5](https://github.com/premake/premake-core)
 - libevent, sqlite3, Lua 5.3 (headers + lib)
 - [mercury233/irrlicht](https://github.com/mercury233/irrlicht) at `./irrlicht`
-- nlohmann/json (vendored via premake in this fork)
+- nlohmann/json 3.12.0 (vendored in `vendor/nlohmann`; no separate package required)
 - submodules: `git submodule update --init --recursive`
 
 ```bash
