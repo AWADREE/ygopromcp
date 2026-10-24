@@ -32,6 +32,7 @@ public:
 	static bool StartClient(unsigned int ip, unsigned short port, bool create_game = true);
 	static void ConnectTimeout(EventSocket fd, short events, void* arg);
 	static void StopClient(unsigned reason = CLIENT_CLOSE_REASON_STOP);
+	static void CancelPendingEndgamePrompts();
 	static void ClientRead(bufferevent* bev, void* ctx);
 	static void ClientEvent(bufferevent* bev, short events, void* ctx);
 	static void ClientThread();

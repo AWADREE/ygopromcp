@@ -8,7 +8,7 @@ project "YGOPro"
     dofile("../irrlicht/defines.lua")
     files { "*.cpp", "*.h" }
 
-    includedirs { "../ocgcore" }
+    includedirs { "../ocgcore", "../vendor" }
     links { "ocgcore" }
 
 
@@ -56,7 +56,7 @@ project "YGOPro"
 
     filter "system:windows"
         files "ygopro.rc"
-        links { "ws2_32", "iphlpapi", "winmm" }
+        links { "ws2_32", "iphlpapi", "winmm", "opengl32", "imm32" }
         defines { "NOMINMAX=1", "WIN32_LEAN_AND_MEAN" }
         if USE_DXSDK then
             defines { "IRR_COMPILE_WITH_DX9_DEV_PACK" }
@@ -66,6 +66,9 @@ project "YGOPro"
 
     filter "not action:vs*"
         cppdialect "C++14"
+
+    filter { "system:windows", "action:gmake" }
+        linkoptions { "-municode" }
 
     filter "system:macosx"
         links { "OpenGL.framework", "Cocoa.framework", "IOKit.framework", "Carbon.framework" }

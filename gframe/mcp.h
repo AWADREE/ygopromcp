@@ -21,7 +21,8 @@ namespace ygo {
 // stderr and starts the stdin reader thread.
 void MCP_Init();
 
-// Called after MainLoop returns. Stops the reader thread.
+// Called after MainLoop returns or initialization fails. Stops the reader
+// thread even when stdin remains open or a request is waiting.
 void MCP_Shutdown();
 
 // Called every frame from Game::MainLoop (GUI thread). Executes any pending

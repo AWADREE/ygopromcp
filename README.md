@@ -27,7 +27,7 @@ client, then drive it tool-by-tool:
 | `ygo_card` | Explain a card on one line (ydkshow-style) by name or code | no |
 | `ygo_chat` | Send a chat message to the room | no |
 | `ygo_surrender` | Surrender the duel (blocks until the server responds) | YES |
-| `ygo_disconnect` | Leave the room (immediate) | no |
+| `ygo_disconnect` | Leave the room; return after the client transport closes and the GUI returns to its room browser | YES |
 
 Every blocking response is one **text block**:
 
@@ -72,7 +72,7 @@ Prerequisites (Linux; the fork builds with the same toolchain as upstream):
 - [premake5](https://github.com/premake/premake-core)
 - libevent, sqlite3, Lua 5.3 (headers + lib)
 - [mercury233/irrlicht](https://github.com/mercury233/irrlicht) at `./irrlicht`
-- nlohmann/json (vendored via premake in this fork)
+- nlohmann/json 3.12.0 (vendored in `vendor/nlohmann`; no separate package required)
 - submodules: `git submodule update --init --recursive`
 
 ```bash
@@ -98,6 +98,11 @@ Requires a YGOPro server (e.g. srvpro) on the target host. In a password room
 the duel starts when the host clicks start; `system.conf` in this fork sets
 `chkMAutoPos/chkSTAutoPos/chkRandomPos/chkAutoChain = 1` (auto-place + forced
 auto-chain) — keep those for agent play.
+
+For a room hosted by the graphical client on this computer only, set
+`local_host_only = 1` in `system.conf` before starting the client, then use
+the normal Create Host screen. The game listener binds to `127.0.0.1` and LAN
+broadcast is disabled. The default value is `0` for normal LAN hosting.
 
 ## Hooking up an agent
 
@@ -126,6 +131,15 @@ Wire protocol: newline-delimited JSON-RPC 2.0 on stdin/stdout, with
 `initialize` → `tools/list` → `tools/call` (standard MCP stdio handshake).
 `YGOCLI_MCP_DEBUG=1` prints `[mcp]`/`[stoc]`/`[ctos]` traces to stderr.
 
+The graphical deck editor also has local MCP controls. `ygo_deck_list` lists
+available local decks, and `ygo_deck_open {"deck":"name","category":"local"}`
+loads one into the visible editor. `ygo_deck_search {"query":"text"}` uses the
+editor search. `ygo_deck_add` and `ygo_deck_remove` accept a numeric `code`, a
+`main`, `extra`, or `side` section, and an optional count from 1 to 3.
+`ygo_deck_save` saves only the currently selected existing local deck. Deck
+switching refuses unsaved edits, and editor card, section, alias, and limit
+rules also apply to MCP edits. These tools do not join a room.
+
 ## Testing
 
 ```bash
@@ -139,19 +153,37 @@ reaches a natural `Game Over` or the run-time cap without deadlock. A per-run
 transcript is written to `/tmp/mcp_transcript.log` (every send/receive with
 timestamps).
 
+The offline recipient-visibility check runs the graphical client against a
+loopback-only fixture and a temporary local card database:
+
+```bash
+python3 tests/visibility_recipient_smoke.py --exe /path/to/YGOPro \
+  --assets . --scratch-dir /path/to/temporary-directory
+```
+
+The scratch directory must already exist. On Windows, pass `--dll-dir` if the
+client's runtime DLL directory is not already on `PATH`. The fixture checks
+the client view of visibility-filtered recipient packets; it does not test the
+server's filtering implementation.
+
 ## Caveats
 
-- The bridge drives **network play only** (connect → lobby → RPS → turn order →
-  duel). Deck building, single-player and replay modes are out of scope; replay
-  playback narrates the log but is untested.
+- The duel bridge drives network play (connect → lobby → RPS → turn order →
+  duel). The separate deck tools use the graphical editor; single-player and
+  replay controls remain out of scope. Replay playback narrates the log but is
+  untested.
 - Tag duels and match (BO3) siding are unverified.
 - A deck rejected by the server shows a modal popup the agent cannot click;
   the reason is surfaced in the `# log` section as `[!] deck rejected: ...` —
   switch decks rather than waiting.
 - Constrained combo selects (tribute etc.) can still be rejected by the core;
   the retry flow re-prompts, and the test watchdog surrenders unsolvable ones.
-- Opponent hand contents and draw names are never exposed (count-only), even
-  though the ygopro v1 protocol leaks draw codes to the client.
+- Hidden opponent hand cards and ordinary draw identities are masked in the
+  network recipient view. Cards explicitly revealed by a public draw or card
+  confirmation can be named while their identity remains trackable. Hand
+  shuffles and hidden-zone refreshes can clear that name; a move into the
+  opponent's face-down deck is followed by such a refresh. Face-down banished
+  cards stay unnamed.
 - See [TODO.md](TODO.md) for the full list of known and suspected issues.
 
 ## Credits

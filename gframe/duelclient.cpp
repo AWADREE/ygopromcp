@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <atomic>
 #include <set>
 #include <thread>
 #include <random>
@@ -21,7 +22,15 @@
 namespace ygo {
 
 namespace {
-	unsigned connect_state{ CONNECT_STATE_NONE };
+	std::atomic<unsigned> connect_state{ CONNECT_STATE_NONE };
+	// These two flags form one seq-cst handshake: cancellation either sees an
+	// active callback and signals it, or the callback sees cancellation itself.
+	std::atomic<bool> mcp_disconnect_requested{ false };
+	std::atomic<bool> duel_end_callback_active{ false };
+	struct ScopedDuelEndCallback {
+		ScopedDuelEndCallback() { duel_end_callback_active.store(true, std::memory_order_seq_cst); }
+		~ScopedDuelEndCallback() { duel_end_callback_active.store(false, std::memory_order_seq_cst); }
+	};
 	unsigned char response_buf[SIZE_RETURN_VALUE]{};
 	size_t response_len{};
 	unsigned int watching{};
@@ -61,7 +70,7 @@ namespace {
 	}
 }
 
-unsigned GetConnectState() { return connect_state; }
+unsigned GetConnectState() { return connect_state.load(std::memory_order_acquire); }
 bufferevent* DuelClient::client_bev = 0;
 unsigned char DuelClient::duel_client_write[SIZE_NETWORK_BUFFER]{};
 unsigned char DuelClient::selftype = 0;
@@ -74,6 +83,7 @@ int DuelClient::WriteBufferEvent(bufferevent* bufev, const void* data, size_t si
 bool DuelClient::StartClient(unsigned int ip, unsigned short port, bool create_game) {
 	if(connect_state != CONNECT_STATE_NONE)
 		return false;
+	mcp_disconnect_requested.store(false, std::memory_order_seq_cst);
 	sockaddr_in sin;
 	client_base = event_base_new();
 	if(!client_base)
@@ -130,6 +140,18 @@ void DuelClient::StopClient(unsigned reason) {
 	if(client_base)
 		event_base_loopbreak(client_base);
 }
+void DuelClient::CancelPendingEndgamePrompts() {
+	// Cancel the replay-save wait and any following duel-end acknowledgement.
+	// They can arrive in one ClientRead callback, even after loopbreak is set.
+	mcp_disconnect_requested.store(true, std::memory_order_seq_cst);
+	if(mainGame) {
+		mainGame->replaySignal.Set();
+		if(duel_end_callback_active.load(std::memory_order_seq_cst)) {
+			mainGame->actionSignal.Set();
+			mainGame->closeDoneSignal.Set();
+		}
+	}
+}
 void DuelClient::ClientRead(bufferevent* bev, void* ctx) {
 	evbuffer* input = bufferevent_get_input(bev);
 	size_t len = evbuffer_get_length(input);
@@ -137,6 +159,8 @@ void DuelClient::ClientRead(bufferevent* bev, void* ctx) {
 		return;
 	uint16_t packet_len = 0;
 	while (len >= 2) {
+		if(mcp_disconnect_requested.load(std::memory_order_seq_cst))
+			break;
 		evbuffer_copyout(input, &packet_len, sizeof packet_len);
 		if (len < packet_len + 2)
 			break;
@@ -750,18 +774,43 @@ void DuelClient::HandleSTOCPacketLan(unsigned char* data, size_t len) {
 		break;
 	}
 	case STOC_DUEL_END: {
+		if(mcp_disconnect_requested.load(std::memory_order_seq_cst))
+			break;
+		ScopedDuelEndCallback endgame_scope;
 		mainGame->gMutex.lock();
+		if(mcp_disconnect_requested.load(std::memory_order_seq_cst)) {
+			mainGame->gMutex.unlock();
+			break;
+		}
 		if(mainGame->dInfo.player_type < 7)
 			mainGame->btnLeaveGame->setVisible(false);
 		mainGame->CloseGameButtons();
 		mainGame->stMessage->setText(dataManager.GetSysString(1500));
+		mainGame->actionSignal.Reset();
 		mainGame->PopupElement(mainGame->wMessage);
 		mainGame->gMutex.unlock();
-		mainGame->actionSignal.Reset();
-		mainGame->actionSignal.Wait();
+		if(!mcp_disconnect_requested.load(std::memory_order_seq_cst)) {
+			if(std::getenv("YGOCLI_MCP_DEBUG")) {
+				fprintf(stderr, "[stoc] duel-end-wait\n");
+				fflush(stderr);
+			}
+			mainGame->actionSignal.Wait();
+		}
+		if(std::getenv("YGOCLI_MCP_DEBUG")) {
+			fprintf(stderr, "[stoc] duel-end-wait-return canceled=%d\n",
+				mcp_disconnect_requested.load(std::memory_order_seq_cst) ? 1 : 0);
+			fflush(stderr);
+		}
+		if(mcp_disconnect_requested.load(std::memory_order_seq_cst))
+			break;
 		mainGame->closeDoneSignal.Reset();
+		if(mcp_disconnect_requested.load(std::memory_order_seq_cst))
+			break;
 		mainGame->closeSignal.Set();
-		mainGame->closeDoneSignal.Wait();
+		if(!mcp_disconnect_requested.load(std::memory_order_seq_cst))
+			mainGame->closeDoneSignal.Wait();
+		if(mcp_disconnect_requested.load(std::memory_order_seq_cst))
+			break;
 		mainGame->gMutex.lock();
 		mainGame->dInfo.isStarted = false;
 		mainGame->dInfo.isInDuel = false;
@@ -787,9 +836,15 @@ void DuelClient::HandleSTOCPacketLan(unsigned char* data, size_t len) {
 		break;
 	}
 	case STOC_REPLAY: {
+		if(mcp_disconnect_requested.load(std::memory_order_seq_cst))
+			break;
 		if (len < 1 + sizeof(ExtendedReplayHeader))
 			return;
 		mainGame->gMutex.lock();
+		if(mcp_disconnect_requested.load(std::memory_order_seq_cst)) {
+			mainGame->gMutex.unlock();
+			break;
+		}
 		mainGame->wPhase->setVisible(false);
 		if(mainGame->dInfo.player_type < 7)
 			mainGame->btnLeaveGame->setVisible(false);
@@ -810,11 +865,19 @@ void DuelClient::HandleSTOCPacketLan(unsigned char* data, size_t len) {
 		std::wcsftime(timetext, sizeof timetext / sizeof timetext[0], L"%Y-%m-%d %H-%M-%S", std::localtime(&starttime));
 		mainGame->ebRSName->setText(timetext);
 		if(!mainGame->chkAutoSaveReplay->isChecked()) {
+			// Reset before exposing the dialog. A GUI or MCP cancellation after
+			// this point must not be lost between PopupElement and Wait.
+			mainGame->replaySignal.Reset();
 			mainGame->wReplaySave->setText(dataManager.GetSysString(1340));
 			mainGame->PopupElement(mainGame->wReplaySave);
 			mainGame->gMutex.unlock();
-			mainGame->replaySignal.Reset();
-			mainGame->replaySignal.Wait();
+			if(!mcp_disconnect_requested.load(std::memory_order_seq_cst)) {
+				if(std::getenv("YGOCLI_MCP_DEBUG")) {
+					fprintf(stderr, "[stoc] replay-save-wait\n");
+					fflush(stderr);
+				}
+				mainGame->replaySignal.Wait();
+			}
 		}
 		else {
 			mainGame->actionParam = 1;
@@ -825,7 +888,8 @@ void DuelClient::HandleSTOCPacketLan(unsigned char* data, size_t len) {
 			mainGame->gMutex.unlock();
 			mainGame->WaitFrameSignal(30);
 		}
-		if(mainGame->actionParam || !is_host) {
+		if(!mcp_disconnect_requested.load(std::memory_order_seq_cst)
+			&& (mainGame->actionParam || !is_host)) {
 			std::memcpy(new_replay.comp_data, prep, data_size);
 			new_replay.comp_size = data_size;
 			if (mainGame->actionParam) {

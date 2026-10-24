@@ -1,11 +1,11 @@
 // MCP bridge implementation. See mcp.h.
 //
 // Protocol: newline-delimited JSON-RPC 2.0. Tools: ygo_connect, ygo_choose,
-// ygo_card, ygo_chat, ygo_surrender, ygo_disconnect (the former ygo_state /
+// ygo_card, ygo_chat, ygo_surrender, ygo_disconnect, and ygo_deck_* (the former ygo_state /
 // ygo_log / ygo_chatlog tools were folded into the text block). ping is the
 // standard MCP liveness method. Only the network-play path (join room, lobby,
-// RPS, turn-order, duel prompts) is supported; other game modes are out of
-// scope for the MCP mode.
+// RPS, turn-order, duel prompts) and the graphical deck editor are supported;
+// other game modes are out of scope for the MCP mode.
 //
 // Threading: a reader thread owns stdin and writes responses to a saved
 // stdout fd (the app's stdout is redirected to stderr at startup). All game
@@ -71,7 +71,9 @@
 #include "duelclient.h"
 #include "data_manager.h"
 #include "deck_manager.h"
+#include "file_system.h"
 #include "bufferio.h"
+#include "mcp_stdio.h"
 
 #include <nlohmann/json.hpp>
 
@@ -79,6 +81,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <cstring>
+#include <cwchar>
 #include <csignal>
 #include <string>
 #include <deque>
@@ -87,13 +90,20 @@
 #include <atomic>
 #include <sstream>
 #include <thread>
+#include <future>
 #include <mutex>
 #include <condition_variable>
 #include <chrono>
 #include <algorithm>
 #include <cctype>
-#include <unistd.h>
+#include <cstdint>
 #include <IEventReceiver.h>
+#ifdef _WIN32
+#include <Windows.h>
+#else
+#include <unistd.h>
+#include <sys/stat.h>
+#endif
 
 // globals owned by other translation units, used by the bridge
 void ClickButton(irr::gui::IGUIElement* btn);   // gframe.cpp, global scope
@@ -121,20 +131,23 @@ struct MCPJob {
     std::condition_variable cv;
 };
 
-static int g_json_fd = -1;
-static bool g_running = false;
+static MCPStdio g_stdio;
+static std::atomic<bool> g_running{ false };
 static std::thread g_thread;
+#ifdef _WIN32
+static HANDLE g_reader_handle = nullptr;
+#endif
 static std::mutex g_qmtx;
 static std::deque<MCPJob*> g_queue;
 
 static std::string MCP_Execute(MCPJob* job);
 static void dbg(const char* s) { if (std::getenv("YGOCLI_MCP_DEBUG")) { fprintf(stderr, "[mcp] %s\n", s); fflush(stderr); } }
 
-// Tools whose response is held until the next decision point (coroutine
-// model, design doc §1). Single source of truth for the blocking set; the
-// reader thread and the executor both consult it.
+// Tools held until the next decision, or until disconnect finishes. The
+// reader thread and executor both consult this blocking set.
 static bool MCP_IsBlockingTool(const std::string& name) {
-    return name == "ygo_connect" || name == "ygo_choose" || name == "ygo_surrender";
+    return name == "ygo_connect" || name == "ygo_choose"
+        || name == "ygo_surrender" || name == "ygo_disconnect";
 }
 
 static MCPJob* MCP_PopJob() {
@@ -145,61 +158,82 @@ static MCPJob* MCP_PopJob() {
     return job;
 }
 
+static bool MCP_DisconnectQueued() {
+    std::lock_guard<std::mutex> lk(g_qmtx);
+    if (g_queue.empty()) return false;
+    const MCPJob* job = g_queue.front();
+    return job->method == "tools/call" && job->params.is_object()
+        && job->params.value("name", "") == "ygo_disconnect";
+}
+
+static void MCP_HandleLine(const std::string& line) {
+    if (line.empty()) return;
+    json req;
+    try {
+        req = json::parse(line);
+    } catch (...) {
+        return;
+    }
+    if (!req.is_object() || !req.contains("id")) { dbg("reader: bad req"); return; }
+    dbg("reader: got request");
+    auto* job = new MCPJob;
+    job->id = req.value("id", 0);
+    job->method = req.value("method", "");
+    if (req.contains("params")) job->params = req["params"];
+    // blocking tools (coroutine): the response waits for a decision point
+    if (job->method == "tools/call" && job->params.contains("name")) {
+        std::string n = job->params.value("name", "");
+        if (MCP_IsBlockingTool(n))
+            job->blocking = true;
+    }
+    {
+        std::lock_guard<std::mutex> lk(g_qmtx);
+        g_queue.push_back(job);
+    }
+    dbg("reader: queued request");
+    {
+        // Blocking calls (coroutine model) wait until the GUI thread
+        // completes them at the next decision point -- NO timeout.
+        // Non-blocking calls keep the 30 s safety cap.
+        std::unique_lock<std::mutex> lk(job->mtx);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+        while (!job->done && g_running && (job->blocking || std::chrono::steady_clock::now() < deadline))
+            job->cv.wait_for(lk, std::chrono::milliseconds(25));
+    }
+    json resp;
+    resp["jsonrpc"] = "2.0";
+    resp["id"] = job->id;
+    if (job->ok) {
+        resp["result"] = job->result;
+    } else {
+        resp["error"] = {{"code", -32603}, {"message", job->error_msg.empty() ? "internal error" : job->error_msg}};
+    }
+    if (g_running)
+        g_stdio.Write(resp.dump() + "\n");
+    {
+        std::lock_guard<std::mutex> lk(g_qmtx);
+        auto queued = std::find(g_queue.begin(), g_queue.end(), job);
+        if (queued != g_queue.end()) g_queue.erase(queued);
+    }
+    delete job;
+}
+
 static void MCP_ReaderThread() {
-    std::string line;
-    while (g_running && std::getline(std::cin, line)) {
-        if (line.empty()) continue;
-        json req;
-        try {
-            req = json::parse(line);
-        } catch (...) {
+    std::string pending;
+    char buffer[4096];
+    while (g_running) {
+        const auto newline = pending.find('\n');
+        if (newline != std::string::npos) {
+            const std::string line = pending.substr(0, newline);
+            pending.erase(0, newline + 1);
+            if (!line.empty()) MCP_HandleLine(line);
             continue;
         }
-        if (!req.is_object() || !req.contains("id")) { dbg("reader: bad req"); continue; }
-        dbg("reader: got request");
-        auto* job = new MCPJob;
-        job->id = req.value("id", 0);
-        job->method = req.value("method", "");
-        if (req.contains("params")) job->params = req["params"];
-        // blocking tools (coroutine): the response waits for a decision point
-        if (job->method == "tools/call" && job->params.contains("name")) {
-            std::string n = job->params.value("name", "");
-            if (MCP_IsBlockingTool(n))
-                job->blocking = true;
-        }
-        {
-            std::lock_guard<std::mutex> lk(g_qmtx);
-            g_queue.push_back(job);
-        }
-        {
-            // Blocking calls (coroutine model) wait until the GUI thread
-            // completes them at the next decision point -- NO timeout.
-            // Non-blocking calls keep the 30 s safety cap.
-            std::unique_lock<std::mutex> lk(job->mtx);
-            if (job->blocking)
-                job->cv.wait(lk, [&] { return job->done || !g_running; });
-            else
-                job->cv.wait_for(lk, std::chrono::seconds(30), [&] { return job->done; });
-        }
-        json resp;
-        resp["jsonrpc"] = "2.0";
-        resp["id"] = job->id;
-        if (job->ok) {
-            resp["result"] = job->result;
-        } else {
-            resp["error"] = {{"code", -32603}, {"message", job->error_msg.empty() ? "internal error" : job->error_msg}};
-        }
-        std::string out = resp.dump() + "\n";
-        if (g_json_fd >= 0) {
-            ssize_t off = 0;
-            while (off < (ssize_t)out.size()) {
-                ssize_t n = ::write(g_json_fd, out.data() + off, out.size() - off);
-                if (n <= 0) break;
-                off += n;
-            }
-        }
-        delete job;
+        const int count = g_stdio.Read(buffer, sizeof(buffer));
+        if (count < 0) break;
+        if (count > 0) pending.append(buffer, static_cast<size_t>(count));
     }
+    g_running = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -230,9 +264,11 @@ static std::string g_connect_err;
 static bool g_connect_deck_err = false;          // set by MCP_NotifyDeckError during connect
 static std::chrono::steady_clock::time_point g_connect_t0;
 
-// A held blocking call (ygo_connect/ygo_choose/ygo_surrender) waiting for the
-// next decision point (GUI thread only).
+// A held call waiting for the next decision or a completed disconnect
+// (GUI thread only).
 static MCPJob* g_active_job = nullptr;
+static bool g_disconnect_pending = false;
+static std::chrono::steady_clock::time_point g_disconnect_t0;
 
 static void MCP_Log(const std::string& line) {
     std::lock_guard<std::mutex> lk(g_log_mtx);
@@ -1639,6 +1675,7 @@ static bool MCP_AutoAnswer() {
     Game* g = mainGame;
     // Blocking boxes are 1~1/1: ack immediately (RETRY ack must not mark acted).
     if (g->wMessage && g->wMessage->isVisible()) {
+        dbg("auto-answer-message");
         if (g->btnMsgOK) MCP_Click(g->btnMsgOK);
         if (g->dInfo.curMsg != MSG_RETRY)
             g_last_acted_seq.store(g_stoc_seq.load(std::memory_order_relaxed));
@@ -1775,6 +1812,7 @@ static void MCP_FinishJob(MCPJob* job) {   // for already-set result/error field
 
 static std::string MCP_DoConnect(const json& args) {
     if (g_connect_phase != ConnectPhase::NONE) return "Error: already connecting";
+    if (GetConnectState() != CONNECT_STATE_NONE) return "Error: already connected";
     if (!mainGame) return "Error: game not ready";
     // Port may arrive as a JSON string ("7911") or a number (7911); the
     // client's ygo_connect schema declares it a string but be tolerant.
@@ -2186,13 +2224,18 @@ static std::string MCP_DoCard(const json& args) {
         }
         std::sort(hits.begin(), hits.end());
     }
-    std::string out;
-    for (uint32_t c : hits) {
-        std::string line = MCP_CardLine(c);
-        if (!line.empty()) out += line + "\n";
+    if (hits.empty()) {
+        MCP_Log("No card found: " + q);
+        return "";
     }
-    if (out.empty()) return "No card found: " + q + "\n";
-    return out;
+    // MCP_Poll returns the standard log/state/explain/options block for a
+    // nonblocking tool. Queue these explicit hits for that block instead of
+    // returning a string that MCP_Poll would discard.
+    {
+        std::lock_guard<std::mutex> lk(g_log_mtx);
+        g_force_explain.insert(hits.begin(), hits.end());
+    }
+    return "";
 }
 
 static std::string MCP_DoSurrender() {
@@ -2205,14 +2248,46 @@ static std::string MCP_DoSurrender() {
     return "";
 }
 
+static void MCP_FinishDisconnect() {
+    Game* g = mainGame;
+    if (!g || !g->device) return;
+    g->dInfo.Clear();
+    g->dField.Clear();
+    g->is_building = false;
+    g->is_siding = false;
+    g->CloseDuelWindow();
+    g->HideElement(g->wHostPrepare);
+    g->device->setEventReceiver(&g->menuHandler);
+    g->btnCreateHost->setEnabled(true);
+    g->btnJoinHost->setEnabled(true);
+    g->btnJoinCancel->setEnabled(true);
+    g->btnStartBot->setEnabled(true);
+    g->btnBotCancel->setEnabled(true);
+    if (g->bot_mode) g->ShowElement(g->wSinglePlay);
+    else g->ShowElement(g->wLanWindow);
+    // curMsg and modal visibility belonged to the old network session.
+    g_last_acted_seq.store(g_stoc_seq.load(std::memory_order_relaxed),
+                           std::memory_order_relaxed);
+}
+
 static std::string MCP_DoDisconnect() {
     Game* g = mainGame;
-    if (g->dInfo.isStarted && g->btnLeaveGame) {
-        MCP_Click(g->btnLeaveGame);
-    } else if (g->btnHostPrepCancel) {
-        MCP_Click(g->btnHostPrepCancel);
-    } else {
-        DuelClient::StopClient();
+    if (!g || !g->device) return "Error: game not ready";
+    if (GetConnectState() == CONNECT_STATE_NONE
+        && g_connect_phase == ConnectPhase::NONE)
+        return "Error: no room connection";
+    // A duelist's Leave button opens the surrender confirmation, and the
+    // room-prep Cancel button is ignored by the field receiver during RPS.
+    // Stop the transport instead; respond only after it actually closes.
+    DuelClient::CancelPendingEndgamePrompts();
+    DuelClient::StopClient();
+    {
+        // Serialize modal cleanup with the network callback's PopupElement.
+        // A replay packet already in flight must not reopen the dialog after
+        // we hide it on the GUI thread.
+        std::lock_guard<std::mutex> gui_lock(g->gMutex);
+        g->CloseGameWindow();
+        g->HideElement(g->wHostPrepare);
     }
     // Return to the initial (disconnected) state (design doc §1): a later
     // ygo_connect must be able to start a fresh join flow.
@@ -2221,8 +2296,332 @@ static std::string MCP_DoDisconnect() {
     g_connect_deck_err = false;
     g_connect_err_set = false;
     g_connect_err.clear();
-    MCP_Log("Left the room.");
+    g_disconnect_pending = true;
+    g_disconnect_t0 = std::chrono::steady_clock::now();
     return "";
+}
+
+// Deck tools operate on the live graphical editor on this same GUI thread.
+// A selected combo-box item is the only source of a writable filename.
+static bool MCP_DeckLeaf(const std::wstring& name) {
+    if (name.empty() || name == L"." || name == L".." || name.size() > 180
+        || name.back() == L'.' || name.back() == L' ') return false;
+    for (wchar_t c : name)
+        if (c < 32 || std::wcschr(L"<>:\"/\\|?*", c)) return false;
+    return true;
+}
+
+static bool MCP_DeckOrdinary(const std::wstring& path, bool directory) {
+#ifdef _WIN32
+    DWORD attr = GetFileAttributesW(path.c_str());
+    return attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_REPARSE_POINT)
+        && !!(attr & FILE_ATTRIBUTE_DIRECTORY) == directory;
+#else
+    char utf8[1024]{};
+    BufferIO::EncodeUTF8(path.c_str(), utf8);
+    struct stat info{};
+    return lstat(utf8, &info) == 0 && (directory ? S_ISDIR(info.st_mode) : S_ISREG(info.st_mode));
+#endif
+}
+
+static bool MCP_DeckCategoryPath(int category, std::wstring& path) {
+    auto* combo = mainGame->cbDBCategory;
+    if (category != DECK_CATEGORY_NONE && category < DECK_CATEGORY_CUSTOM) return false;
+    if (category < 0 || category >= static_cast<int>(combo->getItemCount())) return false;
+    path = L"./deck";
+    if (!MCP_DeckOrdinary(path, true)) return false;
+    if (category >= DECK_CATEGORY_CUSTOM) {
+        std::wstring name = combo->getItem(category);
+        if (!MCP_DeckLeaf(name)) return false;
+        path += L"/" + name;
+    }
+    return path.size() <= 220 && MCP_DeckOrdinary(path, true);
+}
+
+static bool MCP_DeckFilePath(int category, const std::wstring& deck, std::wstring& path) {
+    if (!MCP_DeckLeaf(deck) || !MCP_DeckCategoryPath(category, path)) return false;
+    path += L"/" + deck + L".ydk";
+    return path.size() <= 210 && MCP_DeckOrdinary(path, false);
+}
+
+static std::string MCP_DeckEditor() {
+    if (!mainGame || !mainGame->device) return "Error: game not ready";
+    if (!mainGame->is_building) {
+        if (!mainGame->wMainMenu || !mainGame->wMainMenu->isVisible()
+            || mainGame->dInfo.isStarted || !mainGame->btnDeckEdit)
+            return "Error: deck editor is unavailable outside the main menu";
+        MCP_Click(mainGame->btnDeckEdit);
+    }
+    if (!mainGame->is_building || mainGame->is_siding || !mainGame->wDeckEdit->isVisible())
+        return "Error: deck editor is unavailable";
+    if (mainGame->deckBuilder.is_draging || mainGame->deckBuilder.is_starting_dragging)
+        return "Error: finish the current card drag first";
+    if (mainGame->wQuery->isVisible() || mainGame->wDeckManage->isVisible()
+        || mainGame->wDMQuery->isVisible() || mainGame->wCategories->isVisible()
+        || mainGame->wLinkMarks->isVisible())
+        return "Error: close the deck editor dialog first";
+    return "";
+}
+
+static bool MCP_DeckString(const json& args, const char* key, std::string& value) {
+    if (!args.is_object() || !args.contains(key) || !args[key].is_string()) return false;
+    value = args[key].get<std::string>();
+    return !value.empty() && value.size() <= 180;
+}
+
+static bool MCP_DeckNumber(const json& args, const char* key, uint32_t& value) {
+    if (!args.is_object() || !args.contains(key) || !args[key].is_number_integer()) return false;
+    if (args[key].is_number_unsigned()) {
+        auto n = args[key].get<uint64_t>();
+        if (n > UINT32_MAX) return false;
+        value = static_cast<uint32_t>(n);
+    } else {
+        auto n = args[key].get<int64_t>();
+        if (n < 0 || n > UINT32_MAX) return false;
+        value = static_cast<uint32_t>(n);
+    }
+    return true;
+}
+
+static std::string MCP_DeckState() {
+    auto& builder = mainGame->deckBuilder;
+    auto& deck = deckManager.current_deck;
+    std::ostringstream out;
+    int category = mainGame->cbDBCategory->getSelected();
+    int selected = mainGame->cbDBDecks->getSelected();
+    out << "# deck editor\ncategory: "
+        << (category == DECK_CATEGORY_NONE ? "local" : U8(mainGame->cbDBCategory->getText()))
+        << "\ndeck: " << (selected < 0 ? "(none)" : U8(mainGame->cbDBDecks->getText()))
+        << "\nmodified: " << (builder.is_modified ? "yes" : "no") << "\n";
+    auto section = [&out](const char* name, const std::vector<const CardDataC*>& cards) {
+        out << name << " (" << cards.size() << "):\n";
+        for (const auto* card : cards)
+            out << "  " << card->code << " " << U8(dataManager.GetName(card->code)) << "\n";
+    };
+    section("main", deck.main);
+    section("extra", deck.extra);
+    section("side", deck.side);
+    return out.str();
+}
+
+static std::string MCP_DoDeckList() {
+    std::string error = MCP_DeckEditor();
+    if (!error.empty()) return error;
+    std::ostringstream out;
+    auto* categories = mainGame->cbDBCategory;
+    for (int i = DECK_CATEGORY_NONE; i < static_cast<int>(categories->getItemCount()); ++i) {
+        std::wstring path;
+        if (!MCP_DeckCategoryPath(i, path)) continue;
+        std::string label = i == DECK_CATEGORY_NONE ? "local" : U8(categories->getItem(i));
+        out << label << ":";
+        mainGame->RefreshDeck(path.c_str(), [&](const wchar_t* item) {
+            std::wstring file;
+            if (MCP_DeckFilePath(i, item, file)) out << " " << U8(item);
+        });
+        out << "\n";
+    }
+    out << MCP_DeckState();
+    return out.str();
+}
+
+static bool MCP_DeckRead(const std::wstring& path, Deck& deck) {
+    FILE* file = DeckManager::OpenDeckFile(path.c_str(), "rb");
+    if (!file) return false;
+    char content[DeckManager::MAX_YDK_SIZE]{};
+    size_t length = std::fread(content, 1, sizeof(content), file);
+    bool okay = !std::ferror(file) && length < sizeof(content);
+    if (std::fclose(file) != 0 || !okay) return false;
+    std::istringstream input(std::string(content, length));
+    return DeckManager::LoadDeckFromStream(deck, input) == 0;
+}
+
+static std::string MCP_DoDeckOpen(const json& args) {
+    std::string error = MCP_DeckEditor();
+    if (!error.empty()) return error;
+    if (mainGame->deckBuilder.is_modified)
+        return "Error: current deck has unsaved edits; save it in the editor first";
+    std::string name;
+    if (!MCP_DeckString(args, "deck", name)) return "Error: deck must be a listed local deck name";
+    std::string category = "local";
+    if (args.is_object() && args.contains("category")
+        && !MCP_DeckString(args, "category", category))
+        return "Error: category must be a listed local category";
+    int selected_category = -1;
+    auto* categories = mainGame->cbDBCategory;
+    for (int i = DECK_CATEGORY_NONE; i < static_cast<int>(categories->getItemCount()); ++i) {
+        if (i == DECK_CATEGORY_SEPARATOR) continue;
+        if ((i == DECK_CATEGORY_NONE && category == "local")
+            || U8(categories->getItem(i)) == category) {
+            selected_category = i;
+            break;
+        }
+    }
+    if (selected_category < 0) return "Error: category is not listed locally";
+    std::wstring category_path;
+    if (!MCP_DeckCategoryPath(selected_category, category_path))
+        return "Error: category is not an ordinary local directory";
+    std::wstring selected_deck;
+    mainGame->RefreshDeck(category_path.c_str(), [&](const wchar_t* item) {
+        if (U8(item) == name) selected_deck = item;
+    });
+    std::wstring file;
+    if (selected_deck.empty() || !MCP_DeckFilePath(selected_category, selected_deck, file))
+        return "Error: deck is not a listed local file";
+    Deck loaded;
+    if (!MCP_DeckRead(file, loaded)) return "Error: cannot load selected deck";
+    int previous_category = categories->getSelected();
+    auto* decks = mainGame->cbDBDecks;
+    std::wstring previous_deck = decks->getSelected() < 0 ? L"" : decks->getText();
+    categories->setSelected(selected_category);
+    mainGame->RefreshDeck(categories, decks);
+    int selected_index = -1;
+    for (int i = 0; i < static_cast<int>(decks->getItemCount()); ++i)
+        if (selected_deck == decks->getItem(i)) { selected_index = i; break; }
+    if (selected_index < 0) {
+        categories->setSelected(previous_category);
+        mainGame->RefreshDeck(categories, decks);
+        for (int i = 0; i < static_cast<int>(decks->getItemCount()); ++i)
+            if (previous_deck == decks->getItem(i)) { decks->setSelected(i); break; }
+        return "Error: selected deck disappeared while opening";
+    }
+    decks->setSelected(selected_index);
+    deckManager.current_deck = std::move(loaded);
+    auto& builder = mainGame->deckBuilder;
+    builder.RefreshReadonly(selected_category);
+    builder.RefreshPackListScroll();
+    builder.prev_category = selected_category;
+    builder.prev_deck = decks->getSelected();
+    builder.is_modified = false;
+    mainGame->ebDeckname->setText(L"");
+    builder.GetHoveredCard();
+    return MCP_DeckState();
+}
+
+static std::string MCP_DoDeckSearch(const json& args) {
+    std::string error = MCP_DeckEditor();
+    if (!error.empty()) return error;
+    std::string query;
+    if (!MCP_DeckString(args, "query", query) || query.size() > 120)
+        return "Error: query must be nonempty text of at most 120 bytes";
+    wchar_t wide[256]{};
+    BufferIO::DecodeUTF8(query.c_str(), wide);
+    auto& builder = mainGame->deckBuilder;
+    builder.ClearSearch();
+    mainGame->ebCardName->setText(wide);
+    builder.StartFilter();
+    builder.GetHoveredCard();
+    std::ostringstream out;
+    out << "matches: " << builder.results.size() << "\n";
+    for (size_t i = 0; i < builder.results.size() && i < 20; ++i) {
+        auto* card = builder.results[i];
+        out << card->code << " " << U8(dataManager.GetName(card->code))
+            << " (available " << builder.available_copies(card) << ")\n";
+    }
+    if (builder.results.size() > 20) out << "showing first 20\n";
+    return out.str();
+}
+
+static std::string MCP_DoDeckEdit(const json& args, bool add) {
+    std::string error = MCP_DeckEditor();
+    if (!error.empty()) return error;
+    auto& builder = mainGame->deckBuilder;
+    if (builder.readonly) return "Error: this deck category is read-only";
+    int selected = mainGame->cbDBDecks->getSelected();
+    std::wstring selected_path;
+    if (selected < 0 || selected >= static_cast<int>(mainGame->cbDBDecks->getItemCount())
+        || !MCP_DeckFilePath(mainGame->cbDBCategory->getSelected(),
+                             mainGame->cbDBDecks->getItem(selected), selected_path))
+        return "Error: select an existing local deck first";
+    uint32_t code{}, count{1};
+    std::string section;
+    if (!MCP_DeckNumber(args, "code", code) || !MCP_DeckString(args, "section", section)
+        || (args.contains("count") && !MCP_DeckNumber(args, "count", count))
+        || count < 1 || count > 3)
+        return "Error: provide a card code, main/extra/side section, and count 1-3";
+    std::vector<const CardDataC*>* cards = nullptr;
+    size_t capacity = 0;
+    if (section == "main") { cards = &deckManager.current_deck.main; capacity = DECK_MAX_SIZE; }
+    else if (section == "extra") { cards = &deckManager.current_deck.extra; capacity = EXTRA_MAX_SIZE; }
+    else if (section == "side") { cards = &deckManager.current_deck.side; capacity = SIDE_MAX_SIZE; }
+    else return "Error: section must be main, extra, or side";
+    if (add) {
+        auto& table = dataManager.GetDataTable();
+        auto found = table.find(code);
+        if (found == table.end() || found->second.type & TYPE_TOKEN)
+            return "Error: card code is unknown or a token";
+        const auto* card = &found->second;
+        bool extra_type = card->type & (TYPE_FUSION | TYPE_SYNCHRO | TYPE_XYZ | TYPE_LINK);
+        if ((section == "main" && extra_type) || (section == "extra" && !extra_type))
+            return "Error: card type does not belong in that section";
+        if (cards->size() + count > capacity) return "Error: section is full";
+        if (builder.available_copies(card) < static_cast<int>(count))
+            return "Error: alias or selected card limit would be exceeded";
+        for (uint32_t i = 0; i < count; ++i) {
+            bool pushed = section == "main" ? builder.push_main(card)
+                : section == "extra" ? builder.push_extra(card) : builder.push_side(card);
+            if (!pushed) return "Error: editor rejected card after validation";
+        }
+    } else {
+        std::vector<int> positions;
+        for (int i = 0; i < static_cast<int>(cards->size()); ++i)
+            if ((*cards)[i]->code == code) positions.push_back(i);
+        if (positions.size() < count) return "Error: selected section has too few copies";
+        for (uint32_t i = 0; i < count; ++i) {
+            int pos = positions[positions.size() - 1 - i];
+            if (section == "main") builder.pop_main(pos);
+            else if (section == "extra") builder.pop_extra(pos);
+            else builder.pop_side(pos);
+        }
+    }
+    return MCP_DeckState();
+}
+
+static bool MCP_DeckWriteSelected(const std::wstring& path) {
+    std::stringstream output;
+    DeckManager::SaveDeck(deckManager.current_deck, output);
+    std::string bytes = output.str();
+    // A private same-directory file prevents a failed write from truncating
+    // the selected deck. Exclusive creation also avoids touching other files.
+    std::wstring temp;
+    FILE* file = nullptr;
+    for (int attempt = 0; attempt < 8 && !file; ++attempt) {
+        auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+        temp = path + L".mcp-" + std::to_wstring(stamp) + L"-" + std::to_wstring(attempt);
+        file = DeckManager::OpenDeckFile(temp.c_str(), "wbx");
+    }
+    if (!file) return false;
+    bool written = std::fwrite(bytes.data(), 1, bytes.size(), file) == bytes.size();
+    if (std::fflush(file) != 0) written = false;
+    if (std::fclose(file) != 0) written = false;
+    bool replaced = false;
+    if (written) {
+#ifdef _WIN32
+        replaced = MoveFileExW(temp.c_str(), path.c_str(),
+                               MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+#else
+        replaced = FileSystem::Rename(temp.c_str(), path.c_str());
+#endif
+    }
+    if (!replaced) FileSystem::RemoveFile(temp.c_str());
+    return replaced;
+}
+
+static std::string MCP_DoDeckSave() {
+    std::string error = MCP_DeckEditor();
+    if (!error.empty()) return error;
+    auto& builder = mainGame->deckBuilder;
+    if (builder.readonly) return "Error: this deck category is read-only";
+    int category = mainGame->cbDBCategory->getSelected();
+    int selected = mainGame->cbDBDecks->getSelected();
+    if (selected < 0 || selected >= static_cast<int>(mainGame->cbDBDecks->getItemCount()))
+        return "Error: select an existing local deck first";
+    std::wstring path;
+    if (!MCP_DeckFilePath(category, mainGame->cbDBDecks->getItem(selected), path))
+        return "Error: selected deck is not an ordinary local file";
+    if (builder.is_modified && !MCP_DeckWriteSelected(path))
+        return "Error: could not save selected deck; unsaved edits remain";
+    builder.is_modified = false;
+    return MCP_DeckState();
 }
 
 // ---------------------------------------------------------------------------
@@ -2263,7 +2662,13 @@ static std::string MCP_Execute(MCPJob* job) {
         tools.push_back(ToolSchema("ygo_card", "Explain a card on one line (ydkshow-style): name or code", {{"name", {{"type", "string"}, {"description", "card name (substring) or numeric code"}}}}));
         tools.push_back(ToolSchema("ygo_chat", "Send a chat message to the room", {{"text", {{"type", "string"}, {"description", "message text"}}}}));
         tools.push_back(ToolSchema("ygo_surrender", "Surrender the duel; blocks until the server responds (side exchange / win-lose)", json::object()));
-        tools.push_back(ToolSchema("ygo_disconnect", "Leave the room; returns to the disconnected state (ygo_connect needed again)", json::object()));
+        tools.push_back(ToolSchema("ygo_disconnect", "Leave the room; returns after the connection closes and the graphical client returns to its room browser", json::object()));
+        tools.push_back(ToolSchema("ygo_deck_list", "Show listed local decks and the current graphical editor deck", json::object()));
+        tools.push_back(ToolSchema("ygo_deck_open", "Load a listed local deck in the graphical editor; refuses to discard unsaved edits", {{"deck", {{"type", "string"}}}, {"category", {{"type", "string"}, {"description", "local or a listed category; defaults to local"}}}}));
+        tools.push_back(ToolSchema("ygo_deck_search", "Search cards with the graphical editor's normal filter", {{"query", {{"type", "string"}}}}));
+        tools.push_back(ToolSchema("ygo_deck_add", "Add copies to the selected local deck, subject to editor section and card limits", {{"code", {{"type", "integer"}}}, {"section", {{"type", "string"}, {"enum", {"main", "extra", "side"}}}}, {"count", {{"type", "integer"}, {"description", "1 to 3; defaults to 1"}}}}));
+        tools.push_back(ToolSchema("ygo_deck_remove", "Remove exact card-code copies from the selected local deck", {{"code", {{"type", "integer"}}}, {"section", {{"type", "string"}, {"enum", {"main", "extra", "side"}}}}, {"count", {{"type", "integer"}, {"description", "1 to 3; defaults to 1"}}}}));
+        tools.push_back(ToolSchema("ygo_deck_save", "Save only the current selected local deck; preserve unsaved edits if writing fails", json::object()));
         job->ok = true;
         job->result = {{"tools", tools}};
         return "";
@@ -2278,6 +2683,12 @@ static std::string MCP_Execute(MCPJob* job) {
         else if (name == "ygo_chat") text = MCP_DoChat(args);
         else if (name == "ygo_surrender") text = MCP_DoSurrender();
         else if (name == "ygo_disconnect") text = MCP_DoDisconnect();
+        else if (name == "ygo_deck_list") text = MCP_DoDeckList();
+        else if (name == "ygo_deck_open") text = MCP_DoDeckOpen(args);
+        else if (name == "ygo_deck_search") text = MCP_DoDeckSearch(args);
+        else if (name == "ygo_deck_add") text = MCP_DoDeckEdit(args, true);
+        else if (name == "ygo_deck_remove") text = MCP_DoDeckEdit(args, false);
+        else if (name == "ygo_deck_save") text = MCP_DoDeckSave();
         else {
             job->ok = false;
             job->error_msg = "unknown tool: " + name;
@@ -2298,30 +2709,73 @@ static std::string MCP_Execute(MCPJob* job) {
 void MCP_Init() {
     if (g_running) return;
     // The MCP channel owns the real stdout; the app's own output goes to stderr.
-    g_json_fd = ::dup(STDOUT_FILENO);
-    if (g_json_fd < 0) return;
-    if (::freopen("/dev/stderr", "w", stdout) == nullptr) {
-        // fall back: keep stdout for the app (MCP will be unusable)
-        ::close(g_json_fd);
-        g_json_fd = -1;
-        return;
-    }
+    if (!g_stdio.Start()) return;
+#ifndef _WIN32
     std::signal(SIGPIPE, SIG_IGN);
+#endif
     g_running = true;
     dbg("init: starting reader thread");
+#ifdef _WIN32
+    std::promise<HANDLE> reader_ready;
+    auto reader_handle = reader_ready.get_future();
+    g_thread = std::thread([&reader_ready] {
+        HANDLE owned = nullptr;
+        if (!DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
+                             &owned, 0, FALSE, DUPLICATE_SAME_ACCESS))
+            std::fprintf(stderr, "MCP: could not retain reader thread handle: %lu\n", GetLastError());
+        reader_ready.set_value(owned);
+        if (owned) MCP_ReaderThread();
+    });
+    g_reader_handle = reader_handle.get();
+    if (!g_reader_handle) {
+        g_running = false;
+        g_thread.join();
+        g_stdio.Stop();
+    }
+#else
     g_thread = std::thread(MCP_ReaderThread);
+#endif
 }
 
 void MCP_Shutdown() {
     g_running = false;
-    if (g_thread.joinable()) g_thread.join();
-    if (g_json_fd >= 0) {
-        ::close(g_json_fd);
-        g_json_fd = -1;
+    if (g_thread.joinable()) {
+#ifdef _WIN32
+        // The reader duplicated its own real Win32 HANDLE at startup, so it
+        // remains valid even if the std::thread's native identifier expires.
+        if (g_reader_handle) {
+            for (;;) {
+                const DWORD wait = WaitForSingleObject(g_reader_handle, 25);
+                if (wait == WAIT_OBJECT_0) break;
+                if (wait == WAIT_TIMEOUT) {
+                    if (!CancelSynchronousIo(g_reader_handle)) {
+                        const DWORD error = GetLastError();
+                        // No I/O may be pending between reads/writes. Keep
+                        // watching: a racing operation may start afterward.
+                        if (error != ERROR_NOT_FOUND)
+                            std::fprintf(stderr, "MCP: CancelSynchronousIo failed: %lu\n", error);
+                    }
+                    continue;
+                }
+                std::fprintf(stderr, "MCP: WaitForSingleObject failed: %lu\n", GetLastError());
+                break;
+            }
+        }
+#endif
+        g_thread.join();
+#ifdef _WIN32
+        if (g_reader_handle) CloseHandle(g_reader_handle);
+        g_reader_handle = nullptr;
+#endif
     }
+    g_queue.clear();
+    g_active_job = nullptr;
+    g_disconnect_pending = false;
+    g_stdio.Stop();
 }
 
 void MCP_Poll() {
+    if (!g_running) return;
     dbg("poll called");
     // The GUI event receiver drops button events while a fade animation is
     // running (ClientField::OnEvent: if(fadingList.size()) break). Defer the
@@ -2331,11 +2785,49 @@ void MCP_Poll() {
     }
     // Auto-answer prompts with exactly ONE way to answer (min~max/1, boxes
     // included); the agent stays blocked until a real decision.
-    MCP_AutoAnswer();
+    // An explicit leave request takes precedence over acknowledging the
+    // endgame modal. Otherwise this tick can dismiss it immediately before
+    // MCP_DoDisconnect gets to cancel its network callback.
+    if (!MCP_DisconnectQueued()) MCP_AutoAnswer();
     // Drive the ygo_connect pre-duel flow (join -> deck -> ready -> start).
     MCP_ConnectTick();
-    // A blocking call is in flight: complete it at the next decision point.
+    // A blocking call is in flight: wait for transport closure on disconnect,
+    // otherwise complete it at the next decision point.
     if (g_active_job) {
+        if (g_disconnect_pending) {
+            if (GetConnectState() != CONNECT_STATE_NONE) {
+                if (std::chrono::steady_clock::now() - g_disconnect_t0
+                    > std::chrono::seconds(15)) {
+                    g_disconnect_pending = false;
+                    MCP_CompleteJob(g_active_job,
+                                    "Error: disconnect timed out\n" + MCP_BlockText());
+                    g_active_job = nullptr;
+                }
+                return;
+            }
+            g_disconnect_pending = false;
+            MCP_FinishDisconnect();
+            MCP_Log("Left the room.");
+            MCP_CompleteJob(g_active_job, MCP_BlockText());
+            g_active_job = nullptr;
+            return;
+        }
+        // A different player can close the room while this client is waiting
+        // for its next decision. The network worker has then finished, but
+        // there may be no next prompt and the normal menu is still hidden by
+        // the LAN window. Complete the pending call with a terminal snapshot.
+        const std::string pending_name = g_active_job->method == "tools/call"
+            ? g_active_job->params.value("name", "") : "";
+        if ((pending_name == "ygo_choose" || pending_name == "ygo_surrender")
+            && GetConnectState() == CONNECT_STATE_NONE) {
+            MCP_FinishDisconnect();
+            g_connect_phase = ConnectPhase::NONE;
+            g_connect_readied = false;
+            MCP_Log("Room connection closed.");
+            MCP_CompleteJob(g_active_job, MCP_BlockText());
+            g_active_job = nullptr;
+            return;
+        }
         bool back_to_menu = mainGame && mainGame->wMainMenu
             && mainGame->wMainMenu->isVisible() && !mainGame->dInfo.isStarted;
         if (back_to_menu) {
@@ -2367,8 +2859,10 @@ void MCP_Poll() {
         if (!job->blocking) {
             // initialize / tools/list: result already set. tools/call:
             // immediate response = the same text block as every tool.
-            if (job->method == "tools/call")
-                MCP_CompleteJob(job, MCP_BlockText());
+            if (job->method == "tools/call") {
+                std::string name = job->params.value("name", "");
+                MCP_CompleteJob(job, name.rfind("ygo_deck_", 0) == 0 ? text : MCP_BlockText());
+            }
             else
                 MCP_FinishJob(job);
             continue;

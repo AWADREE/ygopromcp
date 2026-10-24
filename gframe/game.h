@@ -62,6 +62,7 @@ struct Config {
 	unsigned short antialias{ 2 };
 	unsigned int enable_log{ 0x3 };
 	unsigned short serverport{ 7911 };
+	bool local_host_only{ false };
 	unsigned char textfontsize{ 14 };
 	wchar_t lasthost[100]{};
 	wchar_t lastport[10]{};

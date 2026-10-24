@@ -102,7 +102,10 @@ bool MenuHandler::OnEvent(const irr::SEvent& event) {
 			case BUTTON_HOST_CONFIRM: {
 				mainGame->bot_mode = false;
 				BufferIO::CopyWideString(mainGame->ebServerName->getText(), mainGame->gameConf.gamename);
-				if(!NetServer::StartServer(mainGame->gameConf.serverport)) {
+				constexpr unsigned int localhost = 0x7f000001;
+				const bool local_only = mainGame->gameConf.local_host_only;
+				if(!NetServer::StartServer(mainGame->gameConf.serverport,
+				                           local_only ? localhost : 0, nullptr, !local_only)) {
 					soundManager.PlaySoundEffect(SOUND_INFO);
 					mainGame->env->addMessageBox(L"", dataManager.GetSysString(1402));
 					break;
