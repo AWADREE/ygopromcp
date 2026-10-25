@@ -8,14 +8,14 @@
 
 Based on [Fluorohydride/ygopro](https://github.com/Fluorohydride/ygopro) through
 [ZisIsNotZis/ygopromcp](https://github.com/ZisIsNotZis/ygopromcp). This
-maintained fork keeps the visible game and deck editor: an MCP client sends
+fork keeps the visible game and deck editor: an MCP client sends
 actions to the same client instance a person can see.
 
 </div>
 
 ## Current scope
 
-The `maintained` branch includes Windows GNU/UCRT64 build and stdio repairs,
+This fork includes Windows GNU/UCRT64 build and stdio repairs,
 recipient-visibility tests and documentation, graphical deck-editor MCP tools,
 disconnect lifecycle repairs, and decision-generation handling for rejected
 choices and card-confirmation panels. This description applies to the
@@ -31,10 +31,10 @@ network port.
 
 ## Get a working local client
 
-Clone the maintained branch and its Git submodules:
+Clone the `main` branch and its Git submodules:
 
 ```sh
-git clone --recurse-submodules --branch maintained https://github.com/AWADREE/ygopromcp.git
+git clone --recurse-submodules --branch main https://github.com/AWADREE/ygopromcp.git
 cd ygopromcp
 ```
 
@@ -79,7 +79,7 @@ release executable is under `bin/release/` (on Windows, `YGOPro.exe`).
 
 The Windows GNU/UCRT64 build, visible GUI, and local MCP flows were exercised.
 A full MSVC build and full Linux graphical build were not executed for this
-maintained revision. The portable stdio helper was separately compiled and
+tested source revision. The portable stdio helper was separately compiled and
 tested on Linux; that is narrower than a full Linux client build.
 
 ## MCP setup and tools
@@ -197,7 +197,7 @@ not fetch images on demand. A missing or cropped image is not proof that a
 card is absent. Verify exact card IDs and image sources, and validate a JPEG
 can actually decode before placing it in the higher-priority expansion path:
 a corrupt readable overlay can mask a valid base image. Do not substitute a
-different card. The maintained source fork does not redistribute third-party
+different card. The source repository does not redistribute third-party
 card artwork or a complete current database.
 Some prerelease cards lack an official English printed full-card image;
 their database text and art provenance need separate checks.
@@ -221,7 +221,7 @@ runtime:
 python tests/windows_mcp_stdio_smoke.py
 ```
 
-Controlled local runs on this maintained source also exercised English GUI
+Controlled local runs on this source also exercised English GUI
 deck search/save/reopen, an ordinary 8000-LP duel reaching an actual result,
 a custom-rule 100-LP duel, both sides' returned MCP calls and clean listener
 release, plus a scripted eight-activation Herald of Perfection payment

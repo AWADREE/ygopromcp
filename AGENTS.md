@@ -1,7 +1,7 @@
 # Repository agent guidance
 
 This is the `ygopromcp` graphical client plus an MCP stdio bridge. Read
-[README.md](README.md) for the current `maintained` branch workflow and
+[README.md](README.md) for the local build and MCP workflows, and
 [docs/mcp-design.md](docs/mcp-design.md) for historical protocol design.
 Implementation and `tools/list` win when design prose differs.
 
