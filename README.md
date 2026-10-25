@@ -1,194 +1,256 @@
 <div align="center">
 
-<img src="docs/ygopromcp-logo.png" alt="ygopromcp" width="220"/>
+<img src="docs/assets/ygopromcp-banner.jpg" alt="YGOPROMCP banner with cyan and gold circuit lines and stylized cards" width="100%"/>
 
 # ygopromcp
 
-**A ygopro GUI instance with an MCP (Model Context Protocol) control plane.**
+**A YGOPro graphical client with an MCP control plane over stdio.**
 
-A fork of [fluorohydride/ygopro](https://github.com/Fluorohydride/ygopro) that
-exposes the running Yu-Gi-Oh! client as a JSON-RPC/MCP stdio server — an AI
-agent (Claude Code, Codex, or any MCP client) reads the board state and plays
-the game through the same event receivers a human click uses.
+Based on [Fluorohydride/ygopro](https://github.com/Fluorohydride/ygopro) through
+[ZisIsNotZis/ygopromcp](https://github.com/ZisIsNotZis/ygopromcp). This
+maintained fork keeps the visible game and deck editor: an MCP client sends
+actions to the same client instance a person can see.
 
 </div>
 
----
+## Current scope
 
-## What it does
+The `maintained` branch includes Windows GNU/UCRT64 build and stdio repairs,
+recipient-visibility tests and documentation, graphical deck-editor MCP tools,
+disconnect lifecycle repairs, and decision-generation handling for rejected
+choices and card-confirmation panels. This description applies to the
+`3eb2da98` source tree (and newer descendants that retain these changes).
+It is not a claim that every platform, duel mode, or card script has been
+tested.
 
-The bridge is **always on** (no `--mcp` flag, no CLI join flags). Launch the
-client, then drive it tool-by-tool:
+The MCP server starts with the graphical client; there is no `--mcp` flag.
+One client process owns one stdin/stdout MCP session. Stdin/stdout carry
+newline-delimited JSON-RPC 2.0; application diagnostics go to stderr. The
+transport is stdio, not an HTTP listener. A game room uses its own separate
+network port.
 
-| Tool | Purpose | Blocks? |
-|---|---|---|
-| `ygo_connect` | Join a room (nickname, host, port, password, deck path), auto-ready, poll start if host; returns at the first decision point | YES |
-| `ygo_choose` | Answer the pending prompt (`id` = int **or** list of ints) and block until the next decision point | YES |
-| `ygo_card` | Explain a card on one line (ydkshow-style) by name or code | no |
-| `ygo_chat` | Send a chat message to the room | no |
-| `ygo_surrender` | Surrender the duel (blocks until the server responds) | YES |
-| `ygo_disconnect` | Leave the room; return after the client transport closes and the GUI returns to its room browser | YES |
+## Get a working local client
 
-Every blocking response is one **text block**:
+Clone the maintained branch and its Git submodules:
 
-```
-# log
-<recent narration, terse>
-
-# state
-<board as a 5×5 markdown table + fzone column>
-
-# card explain
-<one-line explains for cards mentioned but not explained for N turns>
-
-# options: min~max/total
-0. <option>
-1. <option>
-...
-```
-
-The `# options` section is present only when the agent must decide. Option ids
-are 0-based; pick a subset of size `k` in `[min,max]` (a list `id`), or one
-option (an int `id`). A cancelable prompt renders as `min=0` and an **empty**
-`id=[]` cancels it. A prompt with exactly one way to answer (`min~max/1`) is
-auto-answered by the bridge and never reaches the agent.
-
-The agent never needs game logic: read the header, pick a random (or computed)
-subset, send `id`. Invalid choices are not offered: level-sum (synchro) selects
-enumerate only valid combinations, and single-card selects
-(`MSG_SELECT_UNSELECT_CARD`) always respond with exactly one card.
-
-The bridge is deliberately dumb about the *client*: choices come from the
-game's own parsed state, responses go through the game's own builders
-(`SetResponseSelectedCards`, `RespondZones`, `RespondSortOrder`), and a
-monotonic STOC sequence counter gates every action so stale prompts are never
-re-answered (the source of the classic "invalid operation" rejections).
-
-## Building
-
-Prerequisites (Linux; the fork builds with the same toolchain as upstream):
-
-- C++17 compiler (gcc/clang)
-- [premake5](https://github.com/premake/premake-core)
-- libevent, sqlite3, Lua 5.3 (headers + lib)
-- [mercury233/irrlicht](https://github.com/mercury233/irrlicht) at `./irrlicht`
-- nlohmann/json 3.12.0 (vendored in `vendor/nlohmann`; no separate package required)
-- submodules: `git submodule update --init --recursive`
-
-```bash
-git clone --recursive https://github.com/<you>/ygopromcp
+```sh
+git clone --recurse-submodules --branch maintained https://github.com/AWADREE/ygopromcp.git
 cd ygopromcp
-premake5 gmake --lua-include-dir=/usr/include/lua5.3 --lua-lib-name=lua5.3
-make -C build config=release -j$(nproc)
-# binary: bin/release/YGOPro
 ```
 
-## Running
+A source checkout alone is not a ready-to-play installation. Supply a
+compatible YGOPro runtime: the built executable, its native libraries,
+`strings.conf`, `textures/`, a compatible `cards.cdb` with English card
+names/effect text, `script/`, and local `deck/*.ydk` files. Keep a runtime's
+writable `system.conf`, deck, replay, and log files together. Launch the
+executable with that runtime as its working directory. The project does not
+ship a complete current English card database or a full catalog of card
+images. Do not infer a card's identity from a missing-image placeholder.
 
-Launch the client (no flags needed — the MCP stdio server takes over stdout,
-app output goes to stderr), then call `ygo_connect`:
+### Build from source
 
-```json
-{ "method": "tools/call", "params": { "name": "ygo_connect",
-  "arguments": { "host": "127.0.0.1", "port": "7911", "password": "RoomName",
-                 "name": "MyName", "deck": "/path/to/deck.ydk" } } }
+Premake generates the GNU Make project in `build/`; `premake5.lua` and
+`.github/workflows/build.yml` list the dependency variants and options.
+The build needs a C++14 compiler, Premake 5, GNU Make for gmake builds,
+and the dependency source trees or installed development libraries selected by
+Premake (including ocgcore, modified Irrlicht, Lua, libevent, SQLite,
+and graphics/audio libraries). nlohmann/json 3.12.0 is vendored in
+`vendor/nlohmann` and does not need a separate package. Recursive Git submodules
+do **not** provide every dependency source used by CI. In particular, CI
+fetches ocgcore and Irrlicht separately and currently fetches Lua 5.4.8;
+do not assume its floating dependency heads equal the tested local set.
+
+On a prepared MSYS2 UCRT64/GNU Make Windows tree, the locally exercised
+build step was:
+
+```sh
+premake5 gmake
+mingw32-make -C build config=release -j4
 ```
 
-Requires a YGOPro server (e.g. srvpro) on the target host. In a password room
-the duel starts when the host clicks start; `system.conf` in this fork sets
-`chkMAutoPos/chkSTAutoPos/chkRandomPos/chkAutoChain = 1` (auto-place + forced
-auto-chain) — keep those for agent play.
+Use the matching UCRT64 toolchain and put its `bin` directory on the
+**build process's** `PATH`, including when invoking GCC from PowerShell.
+Otherwise `cc1plus.exe` can fail to find `libmpc-3.dll` even when the MSYS2
+package is installed. The tested build needed an Irrlicht static-archive
+response-file workaround for Windows command-length limits; a fresh checkout
+is not guaranteed to build unmodified with the two commands above. Keep
+dependency versions and any local workaround recorded with a build. The
+release executable is under `bin/release/` (on Windows, `YGOPro.exe`).
 
-For a room hosted by the graphical client on this computer only, set
-`local_host_only = 1` in `system.conf` before starting the client, then use
-the normal Create Host screen. The game listener binds to `127.0.0.1` and LAN
-broadcast is disabled. The default value is `0` for normal LAN hosting.
+The Windows GNU/UCRT64 build, visible GUI, and local MCP flows were exercised.
+A full MSVC build and full Linux graphical build were not executed for this
+maintained revision. The portable stdio helper was separately compiled and
+tested on Linux; that is narrower than a full Linux client build.
 
-## Hooking up an agent
+## MCP setup and tools
 
-MCP stdio client config (`.mcp.json`):
+Configure a **single** stdio client to launch a **single** graphical client
+process, with its working directory set to the prepared runtime. The exact
+MCP-client configuration syntax varies; this is the usual shape:
 
 ```json
 {
   "mcpServers": {
     "ygopromcp": {
       "type": "stdio",
-      "command": "/abs/path/to/YGOPro",
+      "command": "/absolute/path/to/YGOPro",
       "args": []
     }
   }
 }
 ```
 
-Agent loop (the entire strategy):
+On Windows use `YGOPro.exe`. Set the launcher/client's working directory to
+the runtime; an MCP client that cannot set it can use a small local launcher.
+The server handles `initialize`, `ping`, and `tools/list`; initialization reports MCP
+protocol version `2024-11-05`. Call `tools/list` for the authoritative
+input schemas of the executable you actually launched. For example,
+after the MCP initialization handshake:
 
-1. `ygo_connect` → blocks until the first decision (RPS / turn order / prompt).
-2. Parse the `# options: min~max/total` header in the text block.
-3. `ygo_choose {"id": <int or list of ints>}` → blocks until the next decision.
-4. Repeat until `Game Over` appears in the block.
-
-Wire protocol: newline-delimited JSON-RPC 2.0 on stdin/stdout, with
-`initialize` → `tools/list` → `tools/call` (standard MCP stdio handshake).
-`YGOCLI_MCP_DEBUG=1` prints `[mcp]`/`[stoc]`/`[ctos]` traces to stderr.
-
-The graphical deck editor also has local MCP controls. `ygo_deck_list` lists
-available local decks, and `ygo_deck_open {"deck":"name","category":"local"}`
-loads one into the visible editor. `ygo_deck_search {"query":"text"}` uses the
-editor search. `ygo_deck_add` and `ygo_deck_remove` accept a numeric `code`, a
-`main`, `extra`, or `side` section, and an optional count from 1 to 3.
-`ygo_deck_save` saves only the currently selected existing local deck. Deck
-switching refuses unsaved edits, and editor card, section, alias, and limit
-rules also apply to MCP edits. These tools do not join a room.
-
-## Testing
-
-```bash
-# start a server first, then (from tests/):
-python3 tests/fork_aggro_play.py <room-name> <deck.ydk>
+```json
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ygo_deck_list","arguments":{}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"ygo_connect","arguments":{"host":"127.0.0.1","port":"7911","password":"PrivateRoom","name":"Player1","deck":"deck/example.ydk"}}}
 ```
 
-A pure-random agent plays full games against itself through the bridge
-(entry via `ygo_connect`); the test passes when turns advance and the game
-reaches a natural `Game Over` or the run-time cap without deadlock. A per-run
-transcript is written to `/tmp/mcp_transcript.log` (every send/receive with
-timestamps).
+The second call assumes a private local room already exists and that
+`deck/example.ydk` belongs to this client's runtime. MCP SDKs usually
+construct these envelopes for you.
 
-The offline recipient-visibility check runs the graphical client against a
-loopback-only fixture and a temporary local card database:
+| Tool | Arguments | Result |
+|---|---|---|
+| `ygo_deck_list` | none | List locally available decks and editor state |
+| `ygo_deck_open` | `deck` name; optional `category` (default `local`) | Open a listed deck in the visible editor |
+| `ygo_deck_search` | `query` text | Apply the editor's search filter; show up to 20 matches |
+| `ygo_deck_add`, `ygo_deck_remove` | integer `code`, `section` = `main`/`extra`/`side`, optional `count` = 1–3 | Edit the selected local deck using editor rules |
+| `ygo_deck_save` | none | Save the currently selected existing local deck |
+| `ygo_connect` | `host`, `port` (schema: string), `password`, optional `name`, `deck` **file path** | Join/upload/ready; block until first decision or failure |
+| `ygo_choose` | `id`: zero-based integer or array of integers | Answer a decision, then block for the next one |
+| `ygo_card` | `name`: name fragment or numeric code as text | Explain a card |
+| `ygo_surrender` | none | Surrender and wait for server response |
+| `ygo_disconnect` | none | Leave and wait for room/transport cleanup |
+| `ygo_chat` | `text` | Send room chat; use only in a room where chat is intended |
 
-```bash
-python3 tests/visibility_recipient_smoke.py --exe /path/to/YGOPro \
-  --assets . --scratch-dir /path/to/temporary-directory
+`ygo_choose` accepts both an integer and an integer array in the
+implementation, although the currently advertised `inputSchema` labels
+`id` as integer. Clients that validate schemas strictly may need a
+single-selection prompt or a bridge/schema correction before using array
+choices. Do not assume multi-selection works through every MCP client.
+
+Deck tools act in the normal graphical editor at the main menu. Open refuses
+to discard unsaved edits. Add/remove/save require a selected existing local
+deck; add enforces known-card, token, section, alias/copy, and deck-size
+rules. Finish a manual drag or modal dialog before issuing a deck tool.
+`ygo_deck_save` does not create an arbitrary new file: create a deck in the
+GUI first, then select it. Save only when you intend to change that file.
+
+A blocking duel response contains narration, state, card explanations, and,
+when a decision is pending, a section like:
+
+```text
+# options: 1~2/3
+0. first legal option
+1. second legal option
+2. third legal option
 ```
 
-The scratch directory must already exist. On Windows, pass `--dll-dir` if the
-client's runtime DLL directory is not already on `PATH`. The fixture checks
-the client view of visibility-filtered recipient packets; it does not test the
-server's filtering implementation.
+Choose one ID or an array with the allowed count. `id=[]` cancels only
+where the prompt explicitly allows zero picks. One-way prompts are answered
+automatically. Never use `ygo_choose` as a state-read or send speculative
+IDs: it performs an action. After a core rejection, `MSG_RETRY` republishes
+the restored prompt. Multi-card `MSG_CONFIRM_CARDS` panels publish an
+acknowledgment decision when the panel becomes ready. The client tracks
+prompt generations so an already answered prompt is not reoffered merely
+because its previous message type remains set. Read the new options after
+every returned call rather than reusing an earlier ID.
 
-## Caveats
+For protocol details, see [docs/mcp-design.md](docs/mcp-design.md). Some
+historical design prose in that document predates the latest implementation;
+the source and `tools/list` control actual behavior.
 
-- The duel bridge drives network play (connect → lobby → RPS → turn order →
-  duel). The separate deck tools use the graphical editor; single-player and
-  replay controls remain out of scope. Replay playback narrates the log but is
-  untested.
-- Tag duels and match (BO3) siding are unverified.
-- A deck rejected by the server shows a modal popup the agent cannot click;
-  the reason is surfaced in the `# log` section as `[!] deck rejected: ...` —
-  switch decks rather than waiting.
-- Constrained combo selects (tribute etc.) can still be rejected by the core;
-  the retry flow re-prompts, and the test watchdog surrenders unsolvable ones.
-- Hidden opponent hand cards and ordinary draw identities are masked in the
-  network recipient view. Cards explicitly revealed by a public draw or card
-  confirmation can be named while their identity remains trackable. Hand
-  shuffles and hidden-zone refreshes can clear that name; a move into the
-  opponent's face-down deck is followed by such a refresh. Face-down banished
-  cards stay unnamed.
-- See [TODO.md](TODO.md) for the full list of known and suspected issues.
+## Private local rooms and multiple clients
 
-## Credits
+For a graphical host confined to this computer, set
+`local_host_only = 1` in **that runtime's** `system.conf` before starting
+that client (restart it if already running), then open the normal Create Host screen. The game listener then binds to
+`127.0.0.1` and LAN broadcast is disabled. The default `0` is for normal
+LAN hosting. Give each room a distinct available port. A second client
+connects using `host: "127.0.0.1"`, that port, the room password/name and
+its own deck file path. Both clients can then drive their own stdio session
+through `ygo_connect`/`ygo_choose`.
 
-- [fluorohydride/ygopro](https://github.com/Fluorohydride/ygopro) — the game
-  client this is forked from.
-- [mycard/srvpro](https://github.com/mycard/srvpro) — the reference server used
-  in testing.
+Use a separate process and writable runtime directory for **each client**:
+`system.conf`, `deck/`, replay/log/output files, and image caches must
+not race. Read-only assets can be shared only if the workflow really keeps
+them immutable. Keep each process's stdin/stdout pair with its own agent;
+do not share a global MCP pipe. Start with one room/two clients, then scale
+within measured CPU and memory limits. Bounded tests used two simultaneous
+rooms/four clients with distinct loopback ports; that establishes isolation
+for those runs, not a general speedup guarantee. Close each owned client
+after disconnect and confirm its listener has released the port.
+
+## Card data, art, and visibility
+
+Card names and effect text come from the local card database. Scripts and
+core behavior must match the database/card IDs. Full-face card images are separate local assets. The current image loader
+checks `expansions/pics/<card-id>.jpg` before `pics/<card-id>.jpg`; it does
+not fetch images on demand. A missing or cropped image is not proof that a
+card is absent. Verify exact card IDs and image sources, and validate a JPEG
+can actually decode before placing it in the higher-priority expansion path:
+a corrupt readable overlay can mask a valid base image. Do not substitute a
+different card. The maintained source fork does not redistribute third-party
+card artwork or a complete current database.
+Some prerelease cards lack an official English printed full-card image;
+their database text and art provenance need separate checks.
+
+The opponent's hidden cards are shown according to recipient network
+packets. An explicitly public reveal may remain named until the client
+receives a shuffle/hidden-zone refresh. Tests exercised player seats and
+selected recipient-packet cases; spectator/replay visibility was not fully
+validated. Do not treat a locally forged internal card state as proof of a
+reachable information leak.
+
+## Testing, limits, and troubleshooting
+
+Tests under `tests/` include offline Windows stdio, deck editor, recipient
+visibility, loopback-host and disconnect cases. The Windows tests require
+an interactive desktop and a built executable; read each test's header and
+arguments before running. For example, after a release build in a prepared
+runtime:
+
+```sh
+python tests/windows_mcp_stdio_smoke.py
+```
+
+Controlled local runs on this maintained source also exercised English GUI
+deck search/save/reopen, an ordinary 8000-LP duel reaching an actual result,
+a custom-rule 100-LP duel, both sides' returned MCP calls and clean listener
+release, plus a scripted eight-activation Herald of Perfection payment
+sequence. These are scoped functional fixtures, not tournament legality,
+competitive consistency, or universal card-script coverage. Replay playback,
+tag/match siding, full MSVC and full Linux GUI runs remain unverified.
+
+If the MCP client sees no tools, check that it launched the graphical
+executable with stdio pipes and sent `initialize` then `tools/list`.
+Keep stdout protocol-clean; `YGOCLI_MCP_DEBUG=1` sends transport/prompt
+traces to stderr. If the GUI opens with missing names/art, inspect its
+working directory and compatible `cards.cdb`, `script/`, `textures/` and
+image paths. If a deck is rejected, the reason is surfaced as
+`[!] deck rejected: ...`; correct the deck/room rules rather than waiting
+on the modal. If a request remains blocked, check whether the peer or the
+visible client is waiting at RPS, turn order, an acknowledgment panel, or a
+duel prompt. Use `ygo_disconnect` for a room exit; close task-owned clients
+after recording results.
+
+## Visual direction
+
+The [visual style note](docs/visual-style.md) records the original banner's
+representative palette and circuit-line treatment for possible future UI
+work. This documentation update does not change the client theme.
+
+## Credits and license
+
+This fork retains the original [license](LICENSE) and source history. Credit
+goes to [Fluorohydride/ygopro](https://github.com/Fluorohydride/ygopro),
+[ZisIsNotZis/ygopromcp](https://github.com/ZisIsNotZis/ygopromcp), and
+[mycard/srvpro](https://github.com/mycard/srvpro), the reference server used
+in testing.
