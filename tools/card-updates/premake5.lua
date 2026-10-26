@@ -3,8 +3,7 @@ project "YGOProUpdateLauncher"
     language "C++"
     rtti "Off"
     files { "UpdateLauncher.cpp", "FirstRunSetup.cpp", "FirstRunSetup.h",
-        "NativeUpdater.cpp", "NativeUpdater.h", "UpdateLauncher.rc",
-        "UpdateLauncher.manifest" }
+        "NativeUpdater.cpp", "NativeUpdater.h", "UpdateLauncher.rc" }
     includedirs { "../../vendor", SQLITE_INCLUDE_DIR, ZLIB_INCLUDE_DIR }
     links { "bcrypt", "user32", "shell32", "comctl32", "winhttp" }
     if BUILD_SQLITE then
