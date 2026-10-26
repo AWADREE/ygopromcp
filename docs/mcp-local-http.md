@@ -32,8 +32,9 @@ The UI reports a bind error if another process already owns the chosen port.
 The server's initialize response includes concise use instructions, and
 `ygo_guide` supplies read-only overview, decks, duel, and limits topics. An
 agent can create an empty deck through `ygo_deck_create`, search/add cards in
-the visible deck editor, and save it without a shell or manual deck file. The
-agent can then join a private room hosted by a separate human game client.
+the visible deck editor, save and close the editor without a shell or manual
+deck file. The agent can then join a private room hosted by a separate human
+game client.
 The server controls only the game process that exposes the URL; it cannot
 launch or close other clients, run research clients over time, or see hidden
 opponent cards. A new URL after each enable must be registered again by the

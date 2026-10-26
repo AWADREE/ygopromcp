@@ -2694,13 +2694,13 @@ static std::string MCP_DoGuide(const json& args) {
     const std::string topic = args.value("topic", "overview");
     if (topic == "overview")
         return "YGOPROMCP controls this visible game client only. Read ygo_guide topics decks, duel, and limits as needed. "
-               "For a new deck, create a unique local name, search and add cards, then save. "
+               "For a new deck, create a unique local name, search and add cards, save, then close the editor. "
                "For a duel, use a separate human client to host a localhost room; join with ygo_connect and your saved deck. "
                "Use the IDs in the latest prompt with ygo_choose. Never infer hidden opponent cards.";
     if (topic == "decks")
         return "Open the graphical deck editor with ygo_deck_list. ygo_deck_create makes a new empty ./deck/<name>.ydk "
                "without overwriting any existing deck. Use ygo_deck_search to find card codes, ygo_deck_add or "
-               "ygo_deck_remove for main/extra/side, and ygo_deck_save before joining. The game's normal card "
+               "ygo_deck_remove for main/extra/side, then ygo_deck_save and ygo_deck_close before joining. The game's normal card "
                "limits and deck validity still apply. Existing unsaved edits must be saved first.";
     if (topic == "duel")
         return "Have the human open a separate client and host a private localhost room. In this attached client, "
@@ -2843,6 +2843,21 @@ static std::string MCP_DoDeckSave() {
     return MCP_DeckState();
 }
 
+static std::string MCP_DoDeckClose() {
+    if (!mainGame || !mainGame->is_building || !mainGame->wDeckEdit->isVisible())
+        return "Error: deck editor is not open";
+    if (mainGame->deckBuilder.is_modified)
+        return "Error: current deck has unsaved edits; save it before leaving";
+    if (mainGame->deckBuilder.is_draging || mainGame->deckBuilder.is_starting_dragging)
+        return "Error: finish the current card drag first";
+    if (mainGame->wQuery->isVisible() || mainGame->wDeckManage->isVisible()
+        || mainGame->wDMQuery->isVisible() || mainGame->wCategories->isVisible()
+        || mainGame->wLinkMarks->isVisible())
+        return "Error: close the deck editor dialog first";
+    mainGame->deckBuilder.Terminate();
+    return "Deck editor closed; main menu is ready";
+}
+
 // ---------------------------------------------------------------------------
 // dispatch
 // ---------------------------------------------------------------------------
@@ -2879,7 +2894,7 @@ static std::string MCP_Execute(MCPJob* job) {
                        {"serverInfo", {{"name", "ygopro-mcp"}, {"version", "1.1.0"}}},
                        {"instructions", "This MCP controls the visible YGOPro client, not other processes. "
                                         "Call ygo_guide for built-in deck, duel, and limits guidance. "
-                                        "Create a local deck with ygo_deck_create, search/add cards, save, then "
+                                        "Create a local deck with ygo_deck_create, search/add cards, save and close the editor, then "
                                         "join a separate human-hosted private room with ygo_connect. "
                                         "Use current prompt option IDs with ygo_choose. Never infer hidden cards."}};
         return "";
@@ -2907,6 +2922,7 @@ static std::string MCP_Execute(MCPJob* job) {
         tools.push_back(ToolSchema("ygo_deck_add", "Add copies to the selected local deck, subject to editor section and card limits", {{"code", {{"type", "integer"}}}, {"section", {{"type", "string"}, {"enum", {"main", "extra", "side"}}}}, {"count", {{"type", "integer"}, {"description", "1 to 3; defaults to 1"}}}}));
         tools.push_back(ToolSchema("ygo_deck_remove", "Remove exact card-code copies from the selected local deck", {{"code", {{"type", "integer"}}}, {"section", {{"type", "string"}, {"enum", {"main", "extra", "side"}}}}, {"count", {{"type", "integer"}, {"description", "1 to 3; defaults to 1"}}}}));
         tools.push_back(ToolSchema("ygo_deck_save", "Save only the current selected local deck; preserve unsaved edits if writing fails", json::object()));
+        tools.push_back(ToolSchema("ygo_deck_close", "Leave the graphical deck editor after saving; refuses unsaved edits or open dialogs", json::object()));
         job->ok = true;
         job->result = {{"tools", tools}};
         return "";
@@ -2929,6 +2945,7 @@ static std::string MCP_Execute(MCPJob* job) {
         else if (name == "ygo_deck_add") text = MCP_DoDeckEdit(args, true);
         else if (name == "ygo_deck_remove") text = MCP_DoDeckEdit(args, false);
         else if (name == "ygo_deck_save") text = MCP_DoDeckSave();
+        else if (name == "ygo_deck_close") text = MCP_DoDeckClose();
         else {
             job->ok = false;
             job->error_msg = "unknown tool: " + name;

@@ -132,7 +132,8 @@ def run(exe, assets, scratch, dll_dir):
             assert "ygo_guide" in result["instructions"] and session
             result, _ = call(endpoint, session, "tools/list", {}, 2)
             names = {tool["name"] for tool in result["tools"]}
-            assert {"ygo_guide", "ygo_deck_create", "ygo_deck_save"}.issubset(names)
+            assert {"ygo_guide", "ygo_deck_create", "ygo_deck_save",
+                    "ygo_deck_close"}.issubset(names)
 
             def tool(name, arguments, request_id):
                 output, _ = call(endpoint, session, "tools/call",
@@ -148,13 +149,21 @@ def run(exe, assets, scratch, dll_dir):
             assert "already exists" in tool("ygo_deck_create", {"name": "http-agent"}, 5)
             assert "modified: yes" in tool("ygo_deck_add", {
                 "code": 102, "section": "main"}, 6)
-            assert "modified: no" in tool("ygo_deck_save", {}, 7)
+            assert "unsaved" in tool("ygo_deck_close", {}, 7)
+            assert "modified: no" in tool("ygo_deck_save", {}, 8)
             assert b"102" in deck.read_bytes()
-            click(hwnd, 250, 42)  # Leave the saved graphical deck editor.
+            assert "main menu is ready" in tool("ygo_deck_close", {}, 9)
+            time.sleep(1.0)  # Wait for the normal menu fade before pointer input.
             click(hwnd, 510, 385)  # Reopen Local MCP from home.
             click(hwnd, 575, 248)  # Disable MCP
-            with socket.socket() as check:
-                assert check.connect_ex(("127.0.0.1", port)) != 0
+            released = False
+            for _ in range(20):
+                with socket.socket() as check:
+                    released = check.connect_ex(("127.0.0.1", port)) != 0
+                if released:
+                    break
+                time.sleep(0.1)
+            assert released, "The local MCP listener remained open after Disable"
             print("PASS normal GUI HTTP initialize, guidance, create/save and disable")
         finally:
             if proc.poll() is None:

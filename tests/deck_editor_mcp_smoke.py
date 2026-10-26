@@ -158,7 +158,8 @@ def run(exe, assets, scratch_dir, dll_dir):
             proc.stdin.flush()
             tool_list = json.loads(lines.get(timeout=15))
             names = {item["name"] for item in tool_list["result"]["tools"]}
-            assert {"ygo_guide", "ygo_deck_create", "ygo_deck_save"}.issubset(names)
+            assert {"ygo_guide", "ygo_deck_create", "ygo_deck_save",
+                    "ygo_deck_close"}.issubset(names)
             assert "cannot launch" in call("ygo_guide", {"topic": "limits"})
             rejected("ygo_guide", {"topic": 17}, "topic")
             print("PASS bundled initialize guidance, guide topics and tool discovery", flush=True)
@@ -181,12 +182,14 @@ def run(exe, assets, scratch_dir, dll_dir):
             assert agent.read_bytes() == empty_bytes and alpha.read_bytes() == alpha_original
             changed = call("ygo_deck_add", {"code": 102, "section": "main"})
             assert "modified: yes" in changed and agent.read_bytes() == empty_bytes
+            rejected("ygo_deck_close", {}, "unsaved")
             rejected("ygo_deck_create", {"name": "another"}, "unsaved")
             assert not (runtime / "deck" / "another.ydk").exists()
             saved = call("ygo_deck_save")
             assert "modified: no" in saved and b"102" in agent.read_bytes()
             assert "deck: agent" in call("ygo_deck_open", {"deck": "agent"})
-            print("PASS MCP-only create, edit, save, reopen and no-overwrite bounds", flush=True)
+            assert "main menu is ready" in call("ygo_deck_close")
+            print("PASS MCP-only create, edit, save, close and no-overwrite bounds", flush=True)
 
             state = call("ygo_deck_open", {"category": "custom", "deck": "gamma"})
             assert "category: custom" in state and "deck: gamma" in state, state
