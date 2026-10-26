@@ -6,8 +6,19 @@ project "YGOProUpdateLauncher"
         "NativeUpdater.cpp", "NativeUpdater.h", "UpdateLauncher.rc",
         "UpdateLauncher.manifest" }
     includedirs { "../../vendor", SQLITE_INCLUDE_DIR, ZLIB_INCLUDE_DIR }
-    links { "bcrypt", "user32", "shell32", "comctl32", "winhttp", SQLITE_LIB_NAME, ZLIB_LIB_NAME }
-    libdirs { SQLITE_LIB_DIR, ZLIB_LIB_DIR }
+    links { "bcrypt", "user32", "shell32", "comctl32", "winhttp" }
+    if BUILD_SQLITE then
+        links { "sqlite" }
+    else
+        links { SQLITE_LIB_NAME }
+        libdirs { SQLITE_LIB_DIR }
+    end
+    if BUILD_ZLIB then
+        links { "zlib" }
+    else
+        links { ZLIB_LIB_NAME }
+        libdirs { ZLIB_LIB_DIR }
+    end
     filter "not action:vs*"
         cppdialect "C++14"
     filter { "system:windows", "action:gmake" }

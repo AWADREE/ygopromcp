@@ -51,9 +51,9 @@ jobs:
     - name: Fetch ocgcore
       uses: actions/checkout@v6
       with:
-        repository: Fluorohydride/ygopro-core
+        repository: mycard/ygopro-core
         path: ocgcore
-        ref: ${{ steps.parse-pr-override.outputs.ocgcore-ref }}
+        ref: ${{ steps.parse-pr-override.outputs.ocgcore-ref || '3209cd866a55e8501a0ed358d3064d9ae0ae6b30' }}
 
     - name: Fetch Irrlicht
       uses: actions/checkout@v6
@@ -311,10 +311,8 @@ jobs:
       uses: actions/checkout@v6
       with:
         submodules: false
-      # Git submodules are ignored in this CI script. The `prepare` job downloads them.
-      # For local development, use `git clone --recursive` when cloning the repository,
-      # and then check out the submodules to the `master` branch.
-      # (The submodule references recorded in this repository may be outdated).
+      # The prepare job downloads reviewed dependency revisions for CI.
+      # Local clones can use the pinned submodule revisions.
 
     - name: Download prepare sources
       uses: actions/download-artifact@v7
