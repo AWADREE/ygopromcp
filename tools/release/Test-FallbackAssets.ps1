@@ -13,7 +13,7 @@ if (-not (Test-Path -LiteralPath (Split-Path -Parent $test))) { throw 'TestRoot 
 
 $positive = Get-ReviewedFallbackAssets -SourceRoot $source -AllowlistPath $allowlist
 if (@($positive.runtime_files).Count -ne 30) { throw 'Positive fallback coverage incomplete.' }
-Write-Output 'PASS: exact 34-file source and 30-file runtime allowlist.'
+Write-Output 'PASS: exact 35-file source and 30-file runtime allowlist.'
 
 Copy-Item -LiteralPath $source -Destination $test -Recurse
 function Expect-Rejected([string]$label,[string]$pattern) {

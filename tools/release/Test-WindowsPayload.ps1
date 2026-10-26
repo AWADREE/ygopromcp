@@ -11,7 +11,7 @@ $dump = (Resolve-Path -LiteralPath $Objdump).Path
 $zipPath = "$dir.zip"
 $manifestPath = Join-Path $dir 'MANIFEST.json'
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-$fallbackPin = '8AAA70E6F47B1F8ACD9060B2C3CA02C43A8B3D16009EBBF820C7F8AD5849B251'
+$fallbackPin = '08DCD76F3FF2568F76A0718B7265ADDB0370DB1DEAEC7714DADF40A7061B9F93'
 $fallbackFiles = [Collections.Generic.Dictionary[string,object]]::new([StringComparer]::OrdinalIgnoreCase)
 if ($manifest.fallback_source_manifest_sha256 -ne $fallbackPin) {
     throw 'Package fallback source manifest differs from reviewed pin.'

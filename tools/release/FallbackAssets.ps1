@@ -5,7 +5,7 @@ function Get-ReviewedFallbackAssets {
     )
     $root = (Resolve-Path -LiteralPath $SourceRoot).Path.TrimEnd('\')
     $manifestPath = Join-Path $root 'SOURCE_MANIFEST.json'
-    $pin = '8AAA70E6F47B1F8ACD9060B2C3CA02C43A8B3D16009EBBF820C7F8AD5849B251'
+    $pin = '08DCD76F3FF2568F76A0718B7265ADDB0370DB1DEAEC7714DADF40A7061B9F93'
     if ((Get-Item -LiteralPath $root).Attributes -band [IO.FileAttributes]::ReparsePoint) {
         throw 'Fallback source root cannot be a reparse point.'
     }
@@ -15,7 +15,7 @@ function Get-ReviewedFallbackAssets {
     }
     $sourceManifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
     $allowlist = Get-Content -LiteralPath $AllowlistPath -Raw | ConvertFrom-Json
-    if ($sourceManifest.schema_version -ne 1 -or @($sourceManifest.entries).Count -ne 34 -or
+    if ($sourceManifest.schema_version -ne 1 -or @($sourceManifest.entries).Count -ne 35 -or
         $allowlist.schema_version -ne 1 -or $allowlist.source_manifest_sha256 -ne $pin -or
         @($allowlist.runtime_files).Count -ne 30) {
         throw 'Fallback manifest or runtime allowlist shape differs from review.'
@@ -32,7 +32,7 @@ function Get-ReviewedFallbackAssets {
     }
     $actual = @(Get-ChildItem -LiteralPath $root -Recurse -Force)
     $actualFiles = @($actual | Where-Object { -not $_.PSIsContainer })
-    if ($actualFiles.Count -ne 35) { throw 'Unreviewed fallback source file count.' }
+    if ($actualFiles.Count -ne 36) { throw 'Unreviewed fallback source file count.' }
     foreach ($item in $actual) {
         $relative = $item.FullName.Substring($root.Length + 1).Replace('\','/')
         if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {

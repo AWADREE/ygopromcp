@@ -27,6 +27,12 @@
       "license": "libjpeg-turbo-build-tool-notice"
     },
     {
+      "path": "licenses/README.ijg",
+      "bytes": 12799,
+      "sha256": "75815E3BF6484201A3C3D17A1BBF10F2E8E3237F84DF10A2357EA896DB2A81D6",
+      "license": "libjpeg-turbo-build-tool-notice"
+    },
+    {
       "path": "licenses/NotoSansCJK-OFL-1.1.txt",
       "bytes": 4393,
       "sha256": "88F117575237307BDD86A17EF15E21790FC9A662FE4DFB103CA1CA077F0D9982",
