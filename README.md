@@ -100,28 +100,38 @@ is the usual shape for a client that accepts an executable and arguments:
 
 Run one stdio MCP client per game process. `Play YGOPro.cmd` starts the
 ordinary game; the optional localhost HTTP MCP control is enabled separately
-on its home screen.
-The server handles `initialize`, `ping`, and `tools/list`; initialization reports MCP
-protocol version `2024-11-05`. Call `tools/list` for the authoritative
+on its home screen. To attach a chat to a game you opened, register the copied
+URL as a Streamable HTTP MCP server in that chat client's MCP settings; pasting
+the URL into chat text alone does not register tools. See
+[local HTTP setup](docs/mcp-local-http.md).
+The server handles `initialize`, `ping`, and `tools/list`. Initialization
+reports MCP protocol version `2024-11-05` for stdio or `2025-11-25` for HTTP,
+and includes concise built-in use instructions. `ygo_guide` provides further
+read-only workflow and scope guidance; no separate skills file is needed.
+Call `tools/list` for the authoritative
 input schemas of the executable you actually launched. For example,
 after the MCP initialization handshake:
 
 ```json
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ygo_deck_list","arguments":{}}}
-{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"ygo_connect","arguments":{"host":"127.0.0.1","port":"7911","password":"PrivateRoom","name":"Player1","deck":"deck/example.ydk"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ygo_guide","arguments":{"topic":"decks"}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"ygo_deck_create","arguments":{"name":"agent-deck"}}}
 ```
 
-The second call assumes a private local room already exists and that
-`deck/example.ydk` belongs to this client's runtime. MCP SDKs usually
-construct these envelopes for you.
+The second call exclusively creates `deck/agent-deck.ydk` in this client's
+runtime. The agent can search and add legal cards, save, close the editor,
+and then join a separately hosted private local room with `ygo_connect`.
+MCP SDKs usually construct these envelopes for you.
 
 | Tool | Arguments | Result |
 |---|---|---|
+| `ygo_guide` | optional `topic`: `overview`, `decks`, `duel`, or `limits` | Read bundled use instructions without changing game state |
 | `ygo_deck_list` | none | List locally available decks and editor state |
+| `ygo_deck_create` | unique local `name` without path separators | Create and select an empty deck; never overwrite an existing file |
 | `ygo_deck_open` | `deck` name; optional `category` (default `local`) | Open a listed deck in the visible editor |
 | `ygo_deck_search` | `query` text | Apply the editor's search filter; show up to 20 matches |
 | `ygo_deck_add`, `ygo_deck_remove` | integer `code`, `section` = `main`/`extra`/`side`, optional `count` = 1–3 | Edit the selected local deck using editor rules |
 | `ygo_deck_save` | none | Save the currently selected existing local deck |
+| `ygo_deck_close` | none | Leave the saved editor for the main menu; refuse unsaved edits |
 | `ygo_connect` | `host`, `port` (schema: string), `password`, optional `name`, `deck` **file path** | Join/upload/ready; block until first decision or failure |
 | `ygo_choose` | `id`: zero-based integer or array of integers | Answer a decision, then block for the next one |
 | `ygo_card` | `name`: name fragment or numeric code as text | Explain a card |
@@ -135,12 +145,13 @@ implementation, although the currently advertised `inputSchema` labels
 single-selection prompt or a bridge/schema correction before using array
 choices. Do not assume multi-selection works through every MCP client.
 
-Deck tools act in the normal graphical editor at the main menu. Open refuses
-to discard unsaved edits. Add/remove/save require a selected existing local
-deck; add enforces known-card, token, section, alias/copy, and deck-size
-rules. Finish a manual drag or modal dialog before issuing a deck tool.
-`ygo_deck_save` does not create an arbitrary new file: create a deck in the
-GUI first, then select it. Save only when you intend to change that file.
+Deck tools act in the normal graphical editor at the main menu. Create makes
+only a new local deck file; it refuses duplicate names and unsaved edits.
+Open refuses to discard unsaved edits. Add/remove/save require a selected
+existing local deck; add enforces known-card, token, section, alias/copy, and
+deck-size rules. Save the deck and call `ygo_deck_close` before joining a room.
+Finish a manual drag or modal dialog before issuing a deck tool. Save only
+when you intend to change the selected file.
 
 A blocking duel response contains narration, state, card explanations, and,
 when a decision is pending, a section like:
