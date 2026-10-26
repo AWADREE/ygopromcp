@@ -20,6 +20,9 @@ project "YGOProUpdateLauncher"
     end
     filter "not action:vs*"
         cppdialect "C++14"
+    filter "action:vs*"
+        -- UpdateLauncher.rc already embeds RT_MANIFEST resource 1.
+        linkoptions { "/MANIFEST:NO" }
     filter { "system:windows", "action:gmake" }
         linkoptions { "-municode" }
     filter "system:windows"
