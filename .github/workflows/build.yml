@@ -588,14 +588,16 @@ jobs:
       matrix:
         name:
           - macos-15-intel
-          - macos-26-arm
+          - macos-15-arm
           - macos-26-intel-cross-compile-static-link
           - macos-26-arm-static-link
         include:
           - name: macos-15-intel
             os: macos-15-intel
-          - name: macos-26-arm
-            os: macos-26
+          # Keep native Arm coverage for both link modes while avoiding a
+          # second macos-26 Arm runner request for the Homebrew build.
+          - name: macos-15-arm
+            os: macos-15
           - name: macos-26-intel-cross-compile-static-link
             os: macos-26
             cross-build-intel: true
