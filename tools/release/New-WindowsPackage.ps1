@@ -181,10 +181,10 @@ foreach ($package in @($required.Values | Sort-Object -Unique)) {
     }
 }
 $gilded = Join-Path $source 'themes\gilded'
-foreach ($path in @('LICENSE','themes\gilded\theme.json','themes\gilded\assets\backdrop.png')) {
+foreach ($path in @('LICENSE','themes\gilded\theme.json','themes\gilded\assets\backdrop.png','themes\gilded\assets\logo.png')) {
     if (-not (Test-Path -LiteralPath (Join-Path $source $path) -PathType Leaf)) { throw "Missing reviewed source file: $path" }
 }
-$themeAllowed = @('theme.json', 'assets\backdrop.png')
+$themeAllowed = @('theme.json', 'assets\backdrop.png', 'assets\logo.png')
 $themeItems = @(Get-ChildItem -LiteralPath $gilded -Recurse -Force)
 foreach ($item in $themeItems) {
     $relative = $item.FullName.Substring($gilded.Length + 1)

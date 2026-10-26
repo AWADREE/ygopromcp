@@ -65,6 +65,9 @@ foreach ($file in @($manifest.files)) {
 foreach ($name in $fallbackFiles.Keys) {
     if (-not $expected.ContainsKey($name)) { throw "Reviewed fallback asset omitted from package: $name" }
 }
+foreach ($name in @('themes/gilded/theme.json','themes/gilded/assets/backdrop.png','themes/gilded/assets/logo.png')) {
+    if (-not $expected.ContainsKey($name)) { throw "Gilded theme asset omitted from package: $name" }
+}
 foreach ($name in @('YGOPro.exe','YGOProUpdateLauncher.exe')) {
     if (-not $expected.ContainsKey($name)) { throw "Executable omitted from manifest: $name" }
 }

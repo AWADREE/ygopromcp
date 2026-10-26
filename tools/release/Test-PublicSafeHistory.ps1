@@ -21,6 +21,8 @@ $objects = @(& git -C $root rev-list --objects $range)
 if ($LASTEXITCODE -ne 0) { throw 'Cannot enumerate newly reachable objects.' }
 
 $privateCardBackBlob = '7cc3153695f89a965297469a7f430de7b4f19221'
+$approvedIconPath = 'resource/gframe/ygopro.ico'
+$approvedIconBlob = '11ce3202cb3b0758abf83e947c6eccc4b1dcc238'
 $reviewedImagesFile = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) 'windows-reviewed-public-images.json'
 if ((Get-FileHash -LiteralPath $reviewedImagesFile -Algorithm SHA256).Hash -ne
     'B05FDF1739D7255B4C1B2612BE92C18E454BF615A6BEA7C764D767ADB2B0B19B') {
@@ -58,6 +60,14 @@ foreach ($line in $objects) {
         (-not $allowedImages.ContainsKey($path) -or $sha -ne $allowedImages[$path])) {
         $bad += "unreviewed image $path $sha"
     }
+    if ($path -match '\.ico$' -and
+        ($path -cne $approvedIconPath -or $sha -ne $approvedIconBlob)) {
+        $bad += "unreviewed icon $path $sha"
+    }
+}
+$candidateIcon = (& git -C $root rev-parse "$candidate`:$approvedIconPath").Trim()
+if ($LASTEXITCODE -ne 0 -or $candidateIcon -ne $approvedIconBlob) {
+    $bad += 'Approved Windows icon differs from candidate source.'
 }
 if ($bad.Count) { throw "Unsafe newly reachable history:`n$($bad -join "`n")" }
 Write-Output "PASS: $($commits.Count) new commits and $($objects.Count) reachable objects exclude known private data and unreviewed images."
