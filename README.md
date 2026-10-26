@@ -1,10 +1,10 @@
 <div align="center">
 
-<img src="docs/assets/ygopromcp-banner.jpg" alt="YGOPROMCP banner with cyan and gold circuit lines and stylized cards" width="100%"/>
+<img src="docs/assets/ygopromcp-banner.png" alt="YGOPROMCP logo banner with cyan and gold circuit lines and stylized cards" width="100%"/>
 
 # ygopromcp
 
-**A YGOPro graphical client with an MCP control plane over stdio.**
+**A YGOPro graphical client with stdio and optional localhost MCP control.**
 
 Based on [Fluorohydride/ygopro](https://github.com/Fluorohydride/ygopro) through
 [ZisIsNotZis/ygopromcp](https://github.com/ZisIsNotZis/ygopromcp). This
@@ -15,19 +15,13 @@ actions to the same client instance a person can see.
 
 ## Current scope
 
-This fork includes Windows GNU/UCRT64 build and stdio repairs,
-recipient-visibility tests and documentation, graphical deck-editor MCP tools,
-disconnect lifecycle repairs, and decision-generation handling for rejected
-choices and card-confirmation panels. This description applies to the
-`3eb2da98` source tree (and newer descendants that retain these changes).
-It is not a claim that every platform, duel mode, or card script has been
-tested.
-
-The MCP server starts with the graphical client; there is no `--mcp` flag.
-One client process owns one stdin/stdout MCP session. Stdin/stdout carry
-newline-delimited JSON-RPC 2.0; application diagnostics go to stderr. The
-transport is stdio, not an HTTP listener. A game room uses its own separate
-network port.
+This source includes the Gilded and Classic theme selector, native first-run
+game-data setup, card-data updates, and local MCP controls. The packaged
+launcher starts the client; stdio MCP remains available through its `--mcp`
+mode. Localhost HTTP MCP is optional and enabled inside the game. See
+[local MCP setup](docs/mcp-local-http.md) for transport and security details.
+A game room uses a separate network port. These features have bounded local
+tests; a final public package and full-audio validation are still pending.
 
 ## Get a working local client
 
@@ -38,14 +32,14 @@ git clone --recurse-submodules --branch main https://github.com/AWADREE/ygopromc
 cd ygopromcp
 ```
 
-A source checkout alone is not a ready-to-play installation. Supply a
-compatible YGOPro runtime: the built executable, its native libraries,
-`strings.conf`, `textures/`, a compatible `cards.cdb` with English card
-names/effect text, `script/`, and local `deck/*.ydk` files. Keep a runtime's
-writable `system.conf`, deck, replay, and log files together. Launch the
-executable with that runtime as its working directory. The project does not
-ship a complete current English card database or a full catalog of card
-images. Do not infer a card's identity from a missing-image placeholder.
+A source checkout alone is not a ready-to-play installation. The reviewed
+Windows package plan includes the native launcher, required DLLs, original
+functional textures and licensed fonts. On first run, the launcher can fetch
+and validate a pinned compatible English card database and scripts without
+overwriting existing user data. Card artwork is not included. See
+[Windows packaging](docs/windows-release-packaging.md) for the package and
+source requirements. Do not infer a card's identity from a missing-image
+placeholder.
 
 ### Build from source
 
@@ -65,7 +59,7 @@ build step was:
 
 ```sh
 premake5 gmake
-mingw32-make -C build config=release -j4
+mingw32-make -C build config=Release -j4
 ```
 
 Use the matching UCRT64 toolchain and put its `bin` directory on the

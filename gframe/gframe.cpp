@@ -2,9 +2,15 @@
 #include "mcp.h"
 #include "game.h"
 #include "data_manager.h"
+#include "ocgapi.h"
+#include "card_update_health.h"
+#include "card_update_ui.h"
+#include <cstdio>
+#include <cstring>
 #include <event2/thread.h>
 #include <clocale>
 #include <memory>
+#include <cstdlib>
 #ifdef _WIN32
 #include <WinSock2.h>
 #include <windows.h>
@@ -26,7 +32,94 @@ void ClickButton(irr::gui::IGUIElement* btn) {
 	ygo::mainGame->device->postEventFromUser(event);
 }
 
+namespace {
+#ifdef _WIN32
+class GameDataReadLease {
+	HANDLE file{INVALID_HANDLE_VALUE};
+public:
+	GameDataReadLease() = default;
+	GameDataReadLease(const GameDataReadLease&) = delete;
+	GameDataReadLease& operator=(const GameDataReadLease&) = delete;
+	~GameDataReadLease() { if(file != INVALID_HANDLE_VALUE) CloseHandle(file); }
+	bool Acquire() {
+		wchar_t image[32768]{};
+		const DWORD size = GetModuleFileNameW(nullptr, image, 32768);
+		if(!size || size >= 32768) return false;
+		wchar_t* separator = std::wcsrchr(image, L'\\');
+		if(!separator) return false;
+		*separator = L'\0';
+		const std::wstring root(image), state = root + L"\\card-updates";
+		const DWORD rootAttrs = GetFileAttributesW(root.c_str());
+		if(rootAttrs == INVALID_FILE_ATTRIBUTES || !(rootAttrs & FILE_ATTRIBUTE_DIRECTORY) ||
+			(rootAttrs & FILE_ATTRIBUTE_REPARSE_POINT)) return false;
+		if(!CreateDirectoryW(state.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS)
+			return false;
+		const DWORD stateAttrs = GetFileAttributesW(state.c_str());
+		if(stateAttrs == INVALID_FILE_ATTRIBUTES || !(stateAttrs & FILE_ATTRIBUTE_DIRECTORY) ||
+			(stateAttrs & FILE_ATTRIBUTE_REPARSE_POINT)) return false;
+		const auto path = state + L"\\game-live.lock";
+		const DWORD attrs = GetFileAttributesW(path.c_str());
+		if(attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_REPARSE_POINT)) return false;
+		file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+			OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+		if(file == INVALID_HANDLE_VALUE) return false;
+		const DWORD journalAttrs = GetFileAttributesW((state + L"\\base-install.json").c_str());
+		return journalAttrs == INVALID_FILE_ATTRIBUTES && GetLastError() == ERROR_FILE_NOT_FOUND;
+	}
+};
+#endif
+byte* CardUpdateProbeScript(const char* name, int* length) {
+    static byte empty[] = "";
+    static byte check[] =
+        "assert(type(Card.GetCardType)=='function' and "
+        "type(Card.IsCardType)=='function' and "
+        "type(Card.IsAllCardTypes)=='function')";
+    if(std::strcmp(name, "./script/__card_update_probe.lua") == 0) {
+        *length = sizeof(check) - 1;
+        return check;
+    }
+    *length = 0;
+    return empty;
+}
+uint32_t CardUpdateProbeMessage(intptr_t duel, uint32_t) {
+    char message[1024]{};
+    get_log_message(duel, message);
+    std::fprintf(stderr, "card-update-probe-error: %s\n", message);
+    return 0;
+}
+int RunCardUpdateProbe() {
+    set_script_reader(CardUpdateProbeScript);
+    set_message_handler(CardUpdateProbeMessage);
+    const intptr_t duel = create_duel(1);
+    const bool supported = preload_script(duel, "./script/__card_update_probe.lua") == 1;
+    end_duel(duel);
+    if(!supported)
+        return EXIT_FAILURE;
+    std::fputs("YGOPROMCP_CARD_UPDATE_CORE_V1 3209cd866a55e8501a0ed358d3064d9ae0ae6b30\n", stderr);
+    return EXIT_SUCCESS;
+}
+}
 static int mymain(int wargc, const wchar_t* const wargv[]) {
+    if(wargc == 2 && std::wcscmp(wargv[1], L"--card-update-probe") == 0)
+        return RunCardUpdateProbe();
+#ifdef _WIN32
+	GameDataReadLease gameDataLease;
+	if(!gameDataLease.Acquire()) {
+		std::fputs("Game data is being updated or its startup lock is unavailable.\n", stderr);
+		return EXIT_FAILURE;
+	}
+#ifdef YGOPROMCP_HTTP_PROBE
+	// Test-only gate: prove a direct game holds the data lease even before
+	// initialization. The production build has no marker or delay.
+	if(const char* marker = std::getenv("YGOPROMCP_HTTP_PROBE_EARLY_LEASE_MARKER")) {
+		if(FILE* file = std::fopen(marker, "wb")) {
+			std::fputs("lease-acquired\n", file);
+			std::fclose(file);
+		}
+		Sleep(5000);
+	}
+#endif
+#endif
 #ifdef __APPLE__
 	ygo::Game::FixMacOSBundleWorkingDirectory();
 #endif //__APPLE__
@@ -65,6 +158,25 @@ static int mymain(int wargc, const wchar_t* const wargv[]) {
 #endif
 		return EXIT_FAILURE;
 	}
+	if(!ygo::WriteCardUpdateStartupHealth(*ygo::mainGame)) {
+		std::fputs("Card update startup health validation failed.\n", stderr);
+		ygo::MCP_Shutdown();
+#ifdef _WIN32
+		WSACleanup();
+#endif
+		return EXIT_FAILURE;
+	}
+#ifdef YGOPROMCP_HTTP_PROBE
+	// Built only by the offline probe target. Exercise the production menu
+	// receiver, not a separate listener startup path.
+	if(const char* port = std::getenv("YGOPROMCP_HTTP_PROBE_PORT")) {
+		std::wstring wide;
+		for(const char* p = port; *p; ++p) wide.push_back(static_cast<wchar_t>(*p));
+		ygo::mainGame->ebMcpPort->setText(wide.c_str());
+		ClickButton(ygo::mainGame->btnMcpOpen);
+		ClickButton(ygo::mainGame->btnMcpToggle);
+	}
+#endif
 
 	bool keep_on_return = false;
 	bool deckCategorySpecified = false;
@@ -188,6 +300,7 @@ static int mymain(int wargc, const wchar_t* const wargv[]) {
 		}
 	}
 	ygo::mainGame->MainLoop();
+	ygo::CardUpdateUiShutdown();
 	ygo::MCP_Shutdown();
 #ifdef _WIN32
 	WSACleanup();

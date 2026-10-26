@@ -1,4 +1,5 @@
 #include "materials.h"
+#include "field_projection.h"
 
 namespace ygo {
 
@@ -130,6 +131,13 @@ Materials::Materials() {
 	mOutLine.setFlag(irr::video::EMF_LIGHTING, false);
 	mOutLine.setFlag(irr::video::EMF_BACK_FACE_CULLING, false);
 	mOutLine.setFlag(irr::video::EMF_ANTI_ALIASING, true);
+	mModernBoard.Lighting = false;
+	mModernBoard.MaterialType = irr::video::EMT_SOLID;
+	mModernBoard.ZWriteEnable = irr::video::EZW_OFF;
+	mModernZone.Lighting = false;
+	mModernZone.MaterialType = irr::video::EMT_SOLID;
+	mModernZone.ZWriteEnable = irr::video::EZW_OFF;
+	mModernZone.Thickness = 2.0f;
 	mTRTexture = mTexture;
 	mTRTexture.AmbientColor = 0xffffff00;
 	mATK.ColorMaterial = irr::video::ECM_AMBIENT;
@@ -138,6 +146,28 @@ Materials::Materials() {
 	mATK.MaterialType = irr::video::EMT_ONETEXTURE_BLEND;
 	mATK.ZWriteEnable = irr::video::EZW_ON;
 	mATK.MaterialTypeParam = pack_textureBlendFunc(irr::video::EBF_SRC_ALPHA, irr::video::EBF_ONE_MINUS_SRC_ALPHA, irr::video::EMFN_MODULATE_1X, irr::video::EAS_VERTEX_COLOR);
+}
+void Materials::UseModernZones() {
+	// Keep every zone center and row pitch: card placement and animations use
+	// these quads. Size main/extra monster and main spell slots for both card
+	// orientations, without touching card vertices or UVs.
+	const auto resize = [](irr::video::S3DVertex* vertices) {
+		const irr::f32 centreX = (vertices[0].Pos.X + vertices[1].Pos.X) * 0.5f;
+		const irr::f32 directionX = vertices[1].Pos.X > vertices[0].Pos.X ? 1.0f : -1.0f;
+		vertices[0].Pos.X = vertices[2].Pos.X = centreX - directionX * MODERN_ZONE_WIDTH * 0.5f;
+		vertices[1].Pos.X = vertices[3].Pos.X = centreX + directionX * MODERN_ZONE_WIDTH * 0.5f;
+		const irr::f32 centreY = (vertices[0].Pos.Y + vertices[2].Pos.Y) * 0.5f;
+		const irr::f32 directionY = vertices[2].Pos.Y > vertices[0].Pos.Y ? 1.0f : -1.0f;
+		vertices[0].Pos.Y = vertices[1].Pos.Y = centreY - directionY * MODERN_ZONE_HEIGHT * 0.5f;
+		vertices[2].Pos.Y = vertices[3].Pos.Y = centreY + directionY * MODERN_ZONE_HEIGHT * 0.5f;
+	};
+	for(int player = 0; player < 2; ++player) {
+		for(int sequence = 0; sequence < 7; ++sequence)
+			resize(vFieldMzone[player][sequence]);
+		for(int sequence = 0; sequence < 5; ++sequence)
+			for(int rule = 0; rule < 2; ++rule)
+				resize(vFieldSzone[player][sequence][rule]);
+	}
 }
 void Materials::GenArrow(float y) {
 	float ay = 1.0f;

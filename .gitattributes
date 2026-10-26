@@ -1,0 +1,9 @@
+# These source-matched license texts are hashed byte for byte in release manifests.
+tools/release/static-audio-notices/** -text whitespace=cr-at-eol
+# The corresponding-source archive omits inherited runtime artwork not used
+# to build the shipped executables. The binary ZIP also excludes these files.
+textures/** export-ignore
+docs/assets/ygopromcp-banner.jpg export-ignore
+# Preserve the hash-pinned fallback assets, font notices, and source manifest byte for byte.
+tools/release/fallback/** -text whitespace=cr-at-eol
+tools/release/windows-reviewed-public-images.json -text whitespace=cr-at-eol

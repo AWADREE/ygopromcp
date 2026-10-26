@@ -1,0 +1,20 @@
+[
+  { "package": "brotli", "files": ["LICENSE"] },
+  { "package": "bzip2", "files": ["LICENSE"] },
+  { "package": "freetype", "files": ["FTL.TXT", "GPLv2.TXT"] },
+  { "package": "gettext-runtime", "files": ["COPYING", "intl\\COPYING.LIB", "libasprintf\\COPYING", "libasprintf\\COPYING.LIB"] },
+  { "package": "glib2", "files": ["COPYING"] },
+  { "package": "graphite2", "files": ["COPYING", "LICENSE"] },
+  { "package": "harfbuzz", "files": ["COPYING"] },
+  { "package": "libevent", "files": ["LICENSE"] },
+  { "package": "libgcc", "files": ["COPYING.RUNTIME", "COPYING3"] },
+  { "package": "libiconv", "files": ["COPYING", "COPYING.LIB", "README", "libcharset\\COPYING.LIB"] },
+  { "package": "libjpeg-turbo", "files": ["LICENSE.md", "README.ijg", "README.md", "simd\\jsimdext.inc"] },
+  { "package": "libpng", "files": ["LICENSE"] },
+  { "package": "libstdc++", "files": ["COPYING.RUNTIME", "COPYING3"] },
+  { "package": "libwinpthread", "files": ["COPYING"] },
+  { "package": "pcre2", "files": ["COPYING", "LICENCE.md"] },
+  { "package": "sqlite3", "files": ["LICENSE"] },
+  { "package": "xz", "files": ["COPYING", "COPYING.0BSD", "COPYING.GPLv2", "COPYING.GPLv3", "COPYING.LGPLv2.1"] },
+  { "package": "zlib", "files": ["LICENSE"] }
+]

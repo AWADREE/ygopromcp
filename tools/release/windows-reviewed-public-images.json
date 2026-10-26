@@ -1,0 +1,126 @@
+{
+  "schema_version": 1,
+  "reviewed_fallback_commit": "933cb20f8fda10f1cb6ebd1e0f2f49fd4d564762",
+  "images": [
+    {
+      "path": "tools/release/fallback/textures/act.png",
+      "git_blob": "eec1a874013014255b9a6e9dc50ed6f4941dd462"
+    },
+    {
+      "path": "docs/assets/ygopromcp-banner.png",
+      "git_blob": "73c4ad74a0c0fecd30729bd0a24b26ceed245936"
+    },
+    {
+      "path": "tools/release/fallback/textures/unknown.jpg",
+      "git_blob": "f8c463cad843083c1beee49a533c294c72700747"
+    },
+    {
+      "path": "tools/release/fallback/textures/target.png",
+      "git_blob": "e783f66449d0a2d57936ec198eba17d6451fb174"
+    },
+    {
+      "path": "tools/release/fallback/textures/ot.png",
+      "git_blob": "89889092ae62ff4b62719c72a46e6b859f7dfde1"
+    },
+    {
+      "path": "tools/release/fallback/textures/number.png",
+      "git_blob": "210b3074679e67d9cebb823afc7b79ed85f6de7b"
+    },
+    {
+      "path": "tools/release/fallback/textures/negated.png",
+      "git_blob": "80e1982d105753779239e7592445bd03887fd65d"
+    },
+    {
+      "path": "tools/release/fallback/textures/mask.png",
+      "git_blob": "561e72a3a1c462f8304f1a17d1cce72c8952412d"
+    },
+    {
+      "path": "tools/release/fallback/textures/lpf.png",
+      "git_blob": "290d3f9dda5853c196cd1e1cd890740e6d9687d5"
+    },
+    {
+      "path": "tools/release/fallback/textures/lp.png",
+      "git_blob": "83d2a1eacebe8a3d95595831df1bb3c36224c9a9"
+    },
+    {
+      "path": "tools/release/fallback/textures/lim.png",
+      "git_blob": "d85f524eb1648ac77dbbd59a98b794a27c229b53"
+    },
+    {
+      "path": "tools/release/fallback/textures/field3.png",
+      "git_blob": "ee7fc777197efad066e325df066749ce81ca55e9"
+    },
+    {
+      "path": "tools/release/fallback/textures/field2.png",
+      "git_blob": "d0444ba367c8c7cc9b5cb638e8ee9f2d0ff65bf0"
+    },
+    {
+      "path": "tools/release/fallback/textures/field.png",
+      "git_blob": "1f6821dd761763d7c069fb8e6b0acc4b8ffb000a"
+    },
+    {
+      "path": "tools/release/fallback/textures/field-transparent3.png",
+      "git_blob": "1d22e7f03c0944f072f0202a6b9a7d76ac24a888"
+    },
+    {
+      "path": "tools/release/fallback/textures/field-transparent2.png",
+      "git_blob": "b5ae075001b0b91c5dcbc86f915d2633f0ddb4b0"
+    },
+    {
+      "path": "tools/release/fallback/textures/f3.jpg",
+      "git_blob": "ee03ccd3d3b62e5aa2a1f61d1f944c7119bffea1"
+    },
+    {
+      "path": "tools/release/fallback/textures/f2.jpg",
+      "git_blob": "bc51071e8cfed70e828c880c21bc2476655d49c8"
+    },
+    {
+      "path": "tools/release/fallback/textures/f1.jpg",
+      "git_blob": "504e493c84ba364ffe99533572111377a5d650d5"
+    },
+    {
+      "path": "tools/release/fallback/textures/equip.png",
+      "git_blob": "e6c5ea7f2c26112141f64ffaf10cb1411b3f0a90"
+    },
+    {
+      "path": "tools/release/fallback/textures/cover2.png",
+      "git_blob": "c9034811b9942ede9d660e110b7131e325a15bc8"
+    },
+    {
+      "path": "tools/release/fallback/textures/cover.png",
+      "git_blob": "a098077460c6b83329ee6a6e1cdc786fc7bd8cc2"
+    },
+    {
+      "path": "tools/release/fallback/textures/chaintarget.png",
+      "git_blob": "a3904aeee65481bc99fb9567d08878191b2db39d"
+    },
+    {
+      "path": "tools/release/fallback/textures/chain.png",
+      "git_blob": "35329f7a006a859f92c82a3d34d6e8da5d336785"
+    },
+    {
+      "path": "tools/release/fallback/textures/bg_menu.jpg",
+      "git_blob": "33df4da6a3bcf6856a2529e0e509df7a1d1596a5"
+    },
+    {
+      "path": "tools/release/fallback/textures/bg_deck.jpg",
+      "git_blob": "364cdf5300ddae901690d94a6d292b83a198fcee"
+    },
+    {
+      "path": "tools/release/fallback/textures/bg.jpg",
+      "git_blob": "ba4887295ea2de4cf77b92c66c9d3956b39c18f2"
+    },
+    {
+      "path": "tools/release/fallback/textures/attack.png",
+      "git_blob": "ae2ac99dc88e15866950bb7063402cea45dfa636"
+    },
+    {
+      "path": "themes/gilded/assets/logo.png",
+      "git_blob": "c7b2296ca5113f4abe26be9e609b8821a49a602e"
+    },
+    {
+      "path": "themes/gilded/assets/backdrop.png",
+      "git_blob": "a2134c7f9225a783d59b00a101789d3e600100f6"
+    }
+  ]
+}

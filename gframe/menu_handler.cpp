@@ -9,6 +9,9 @@
 #include "single_mode.h"
 #include "sound_manager.h"
 #include "game.h"
+#include "mcp.h"
+#include "card_update_ui.h"
+#include "bufferio.h"
 
 namespace ygo {
 
@@ -39,6 +42,76 @@ bool MenuHandler::OnEvent(const irr::SEvent& event) {
 			else
 				soundManager.PlaySoundEffect(SOUND_BUTTON);
 			switch(id) {
+			case BUTTON_MCP_OPEN: {
+				mainGame->HideElement(mainGame->wMainMenu);
+				mainGame->ShowElement(mainGame->wMcpPanel);
+				mainGame->UpdateMcpHomeStatus();
+				return true;
+			}
+			case BUTTON_MCP_CLOSE: {
+				mainGame->HideElement(mainGame->wMcpPanel);
+				mainGame->ShowElement(mainGame->wMainMenu);
+				return true;
+			}
+			case BUTTON_SETTINGS_OPEN: {
+				mainGame->HideElement(mainGame->wMainMenu);
+				mainGame->ShowElement(mainGame->wHomeSettings);
+				return true;
+			}
+			case BUTTON_SETTINGS_CLOSE: {
+				mainGame->HideElement(mainGame->wHomeSettings);
+				mainGame->ShowElement(mainGame->wMainMenu);
+				return true;
+			}
+			case BUTTON_GAME_DATA_OPEN: {
+				mainGame->HideElement(mainGame->wHomeSettings);
+				mainGame->ShowElement(mainGame->wGameDataSettings);
+				CardUpdateUiOpen(*mainGame);
+				return true;
+			}
+			case BUTTON_GAME_DATA_CLOSE: {
+				mainGame->HideElement(mainGame->wGameDataSettings);
+				mainGame->ShowElement(mainGame->wHomeSettings);
+				return true;
+			}
+			case BUTTON_UPDATE_CHECK: CardUpdateUiAction(*mainGame, CardUpdateAction::Check); return true;
+			case BUTTON_UPDATE_DOWNLOAD: CardUpdateUiAction(*mainGame, CardUpdateAction::Download); return true;
+			case BUTTON_UPDATE_APPLY: CardUpdateUiAction(*mainGame, CardUpdateAction::Schedule); return true;
+			case BUTTON_UPDATE_RESTORE: CardUpdateUiAction(*mainGame, CardUpdateAction::Rollback); return true;
+			case BUTTON_UPDATE_CANCEL: CardUpdateUiAction(*mainGame, CardUpdateAction::Cancel); return true;
+			case BUTTON_MCP_TOGGLE: {
+				if(MCP_HTTP_IsRunning()) {
+					MCP_HTTP_Stop();
+					mainGame->mcpStatusError.clear();
+				} else {
+					const std::wstring value = mainGame->ebMcpPort->getText();
+					unsigned port = 0;
+					bool valid = !value.empty();
+					for(wchar_t digit : value) {
+						if(digit < L'0' || digit > L'9') { valid = false; break; }
+						const unsigned next = static_cast<unsigned>(digit - L'0');
+						if(port > (65535u - next) / 10u) { valid = false; break; }
+						port = port * 10u + next;
+					}
+					if(!valid || port == 0) {
+						mainGame->mcpStatusError = L"Use a port from 1 to 65535";
+					} else {
+						mainGame->mcpStatusError = L"Starting...";
+						std::string error;
+						if(MCP_HTTP_Start(static_cast<uint16_t>(port), error)) {
+							mainGame->gameConf.mcp_port = static_cast<int>(port);
+							mainGame->mcpStatusError.clear();
+						} else mainGame->mcpStatusError = BufferIO::DecodeUTF8String(error);
+					}
+				}
+				mainGame->UpdateMcpHomeStatus();
+				return true;
+			}
+			case BUTTON_MCP_COPY: {
+				if(MCP_HTTP_IsRunning())
+					mainGame->env->getOSOperator()->copyToClipboard(MCP_HTTP_Endpoint().c_str());
+				return true;
+			}
 			case BUTTON_MODE_EXIT: {
 				mainGame->device->closeDevice();
 				break;
@@ -603,6 +676,10 @@ bool MenuHandler::OnEvent(const irr::SEvent& event) {
 		}
 		case irr::gui::EGET_COMBO_BOX_CHANGED: {
 			switch(id) {
+			case COMBOBOX_HOME_THEME: {
+				mainGame->SelectTheme(mainGame->cbHomeTheme->getSelected() == 1 ? "gilded" : "classic");
+				return true;
+			}
 			case COMBOBOX_BOT_RULE: {
 				mainGame->RefreshBot();
 				break;

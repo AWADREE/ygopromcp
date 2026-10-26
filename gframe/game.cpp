@@ -1,6 +1,8 @@
 #include "config.h"
 #include "mcp.h"
+#include "card_update_ui.h"
 #include "game.h"
+#include "field_projection.h"
 #include "CGUITTFont.h"
 #include "file_system.h"
 #include "image_manager.h"
@@ -8,11 +10,16 @@
 #include "deck_manager.h"
 #include "sound_manager.h"
 #include "materials.h"
+#include "client_card.h"
 #include "duelclient.h"
 #include "netserver.h"
 #include "single_mode.h"
 #include <thread>
 #include <chrono>
+#include <cstdlib>
+#ifdef YGOPROMCP_HTTP_PROBE
+void ClickButton(irr::gui::IGUIElement* btn);
+#endif
 #ifdef _WIN32
 #include <windows.h>
 #include <timeapi.h>
@@ -216,32 +223,101 @@ bool Game::Initialize() {
 	//main menu
 	wchar_t strbuf[256];
 	myswprintf(strbuf, L"YGOPro Version:%X.0%X.%X", (PRO_VERSION & 0xf000U) >> 12, (PRO_VERSION & 0x0ff0U) >> 4, PRO_VERSION & 0x000fU);
-	wMainMenu = env->addWindow(irr::core::rect<irr::s32>(370, 200, 650, 415), false, strbuf);
+	wMainMenu = env->addWindow(irr::core::rect<irr::s32>(370, 165, 650, 475), false, strbuf);
 	wMainMenu->getCloseButton()->setVisible(false);
 	btnLanMode = env->addButton(irr::core::rect<irr::s32>(10, 30, 270, 60), wMainMenu, BUTTON_LAN_MODE, dataManager.GetSysString(1200));
 	btnSingleMode = env->addButton(irr::core::rect<irr::s32>(10, 65, 270, 95), wMainMenu, BUTTON_SINGLE_MODE, dataManager.GetSysString(1201));
 	btnReplayMode = env->addButton(irr::core::rect<irr::s32>(10, 100, 270, 130), wMainMenu, BUTTON_REPLAY_MODE, dataManager.GetSysString(1202));
 //	btnTestMode = env->addButton(irr::core::rect<irr::s32>(10, 135, 270, 165), wMainMenu, BUTTON_TEST_MODE, dataManager.GetSysString(1203));
 	btnDeckEdit = env->addButton(irr::core::rect<irr::s32>(10, 135, 270, 165), wMainMenu, BUTTON_DECK_EDIT, dataManager.GetSysString(1204));
-	btnModeExit = env->addButton(irr::core::rect<irr::s32>(10, 170, 270, 200), wMainMenu, BUTTON_MODE_EXIT, dataManager.GetSysString(1210));
+	btnSettingsOpen = env->addButton(irr::core::rect<irr::s32>(10, 170, 270, 200), wMainMenu, BUTTON_SETTINGS_OPEN, L"Settings");
+	btnMcpOpen = env->addButton(irr::core::rect<irr::s32>(10, 205, 270, 235), wMainMenu, BUTTON_MCP_OPEN, L"Local MCP");
+	btnModeExit = env->addButton(irr::core::rect<irr::s32>(10, 240, 270, 270), wMainMenu, BUTTON_MODE_EXIT, dataManager.GetSysString(1210));
+	stMcpHome = env->addStaticText(L"MCP: stopped", irr::core::rect<irr::s32>(10, 278, 270, 301), false, false, wMainMenu);
+	wMcpPanel = env->addWindow(irr::core::rect<irr::s32>(250, 155, 774, 475), false, L"Local MCP");
+	wMcpPanel->getCloseButton()->setVisible(false);
+	wMcpPanel->setVisible(false);
+	stMcpLabel = env->addStaticText(L"Only this PC can connect. Enter a free localhost port:",
+		irr::core::rect<irr::s32>(22, 42, 492, 68), false, false, wMcpPanel);
+	ebMcpPort = env->addEditBox(std::to_wstring(gameConf.mcp_port).c_str(),
+		irr::core::rect<irr::s32>(22, 76, 142, 110), true, wMcpPanel);
+	btnMcpToggle = env->addButton(irr::core::rect<irr::s32>(158, 76, 492, 110),
+		wMcpPanel, BUTTON_MCP_TOGGLE, L"Enable MCP");
+	stMcpStatus = env->addStaticText(L"Stopped", irr::core::rect<irr::s32>(22, 126, 492, 156),
+		false, false, wMcpPanel);
+	stMcpEndpoint = env->addStaticText(L"Enable to get a local connection URL",
+		irr::core::rect<irr::s32>(22, 170, 492, 200), false, false, wMcpPanel);
+	btnMcpCopy = env->addButton(irr::core::rect<irr::s32>(22, 216, 320, 254),
+		wMcpPanel, BUTTON_MCP_COPY, L"Copy connection URL");
+	btnMcpCopy->setEnabled(false);
+	btnMcpClose = env->addButton(irr::core::rect<irr::s32>(348, 216, 492, 254),
+		wMcpPanel, BUTTON_MCP_CLOSE, L"Back");
+	wHomeSettings = env->addWindow(irr::core::rect<irr::s32>(300, 180, 724, 420), false, L"Settings");
+	wHomeSettings->getCloseButton()->setVisible(false);
+	wHomeSettings->setVisible(false);
+	env->addStaticText(L"Theme", irr::core::rect<irr::s32>(22, 45, 380, 73), false, false, wHomeSettings);
+	cbHomeTheme = env->addComboBox(irr::core::rect<irr::s32>(22, 82, 390, 120), wHomeSettings, COMBOBOX_HOME_THEME);
+	cbHomeTheme->addItem(L"Classic");
+	if(themeManager.IsAvailable("gilded")) cbHomeTheme->addItem(L"Gilded Duel Terminal");
+	btnSettingsClose = env->addButton(irr::core::rect<irr::s32>(255, 165, 390, 205),
+		wHomeSettings, BUTTON_SETTINGS_CLOSE, L"Back");
+	btnGameDataOpen = env->addButton(irr::core::rect<irr::s32>(22, 165, 238, 205),
+		wHomeSettings, BUTTON_GAME_DATA_OPEN, L"Game Data & Updates");
+	// Base setup runs in the packaged launcher before this client initializes.
+	btnGameDataOpen->setVisible(CardUpdateUiAvailable());
+	wGameDataSettings = env->addWindow(irr::core::rect<irr::s32>(232, 105, 792, 535),
+		false, L"Game Data & Updates");
+	wGameDataSettings->getCloseButton()->setVisible(false);
+	wGameDataSettings->setVisible(false);
+	env->addStaticText(L"Base game data", irr::core::rect<irr::s32>(22, 35, 530, 59),
+		false, false, wGameDataSettings);
+	stGameDataBaseStatus = env->addStaticText(L"Base data loaded at startup. The launcher handles first-run setup and recovery.",
+		irr::core::rect<irr::s32>(22, 66, 530, 101), false, true, wGameDataSettings);
+	btnGameDataImport = env->addButton(irr::core::rect<irr::s32>(22, 108, 234, 145),
+		wGameDataSettings, -1, L"Import existing data");
+	btnGameDataImport->setVisible(false);
+	env->addStaticText(L"English prerelease overlay", irr::core::rect<irr::s32>(22, 172, 530, 197),
+		false, false, wGameDataSettings);
+	stUpdateProvider = env->addStaticText(L"Provider: not checked",
+		irr::core::rect<irr::s32>(22, 205, 530, 228), false, false, wGameDataSettings);
+	stUpdateStatus = env->addStaticText(L"Updates are unavailable in this build.",
+		irr::core::rect<irr::s32>(22, 232, 530, 257), false, false, wGameDataSettings);
+	stUpdateDetail = env->addStaticText(L"A verified core and data service are required.",
+		irr::core::rect<irr::s32>(22, 262, 530, 304), false, true, wGameDataSettings);
+	btnUpdateCheck = env->addButton(irr::core::rect<irr::s32>(22, 310, 150, 346),
+		wGameDataSettings, BUTTON_UPDATE_CHECK, L"Check");
+	btnUpdateDownload = env->addButton(irr::core::rect<irr::s32>(162, 310, 290, 346),
+		wGameDataSettings, BUTTON_UPDATE_DOWNLOAD, L"Download");
+	btnUpdateApply = env->addButton(irr::core::rect<irr::s32>(302, 310, 530, 346),
+		wGameDataSettings, BUTTON_UPDATE_APPLY, L"Apply on next launch");
+	btnUpdateRestore = env->addButton(irr::core::rect<irr::s32>(22, 355, 195, 392),
+		wGameDataSettings, BUTTON_UPDATE_RESTORE, L"Restore previous");
+	btnUpdateCancel = env->addButton(irr::core::rect<irr::s32>(207, 355, 343, 392),
+		wGameDataSettings, BUTTON_UPDATE_CANCEL, L"Cancel");
+	btnGameDataClose = env->addButton(irr::core::rect<irr::s32>(394, 355, 530, 392),
+		wGameDataSettings, BUTTON_GAME_DATA_CLOSE, L"Back");
+	for(auto* action : {btnGameDataImport, btnUpdateCheck, btnUpdateDownload,
+			btnUpdateApply, btnUpdateRestore, btnUpdateCancel})
+		action->setEnabled(false);
 	//lan mode
 	wLanWindow = env->addWindow(irr::core::rect<irr::s32>(220, 100, 800, 520), false, dataManager.GetSysString(1200));
 	wLanWindow->getCloseButton()->setVisible(false);
 	wLanWindow->setVisible(false);
-	env->addStaticText(dataManager.GetSysString(1220), irr::core::rect<irr::s32>(10, 30, 220, 50), false, false, wLanWindow);
+	stLanNickname = env->addStaticText(dataManager.GetSysString(1220), irr::core::rect<irr::s32>(10, 30, 220, 50), false, false, wLanWindow);
 	ebNickName = env->addEditBox(gameConf.nickname, irr::core::rect<irr::s32>(110, 25, 450, 50), true, wLanWindow);
 	ebNickName->setTextAlignment(irr::gui::EGUIA_UPPERLEFT, irr::gui::EGUIA_CENTER);
 	lstHostList = env->addListBox(irr::core::rect<irr::s32>(10, 60, 570, 320), wLanWindow, LISTBOX_LAN_HOST, true);
 	lstHostList->setItemHeight(18);
 	btnLanRefresh = env->addButton(irr::core::rect<irr::s32>(240, 325, 340, 350), wLanWindow, BUTTON_LAN_REFRESH, dataManager.GetSysString(1217));
-	env->addStaticText(dataManager.GetSysString(1221), irr::core::rect<irr::s32>(10, 360, 220, 380), false, false, wLanWindow);
+	stLanHostIP = env->addStaticText(dataManager.GetSysString(1221), irr::core::rect<irr::s32>(10, 360, 220, 380), false, false, wLanWindow);
 	ebJoinHost = env->addEditBox(gameConf.lasthost, irr::core::rect<irr::s32>(110, 355, 350, 380), true, wLanWindow);
 	ebJoinHost->setTextAlignment(irr::gui::EGUIA_CENTER, irr::gui::EGUIA_CENTER);
 	ebJoinPort = env->addEditBox(gameConf.lastport, irr::core::rect<irr::s32>(360, 355, 420, 380), true, wLanWindow);
 	ebJoinPort->setTextAlignment(irr::gui::EGUIA_CENTER, irr::gui::EGUIA_CENTER);
-	env->addStaticText(dataManager.GetSysString(1222), irr::core::rect<irr::s32>(10, 390, 220, 410), false, false, wLanWindow);
+	stLanPassword = env->addStaticText(dataManager.GetSysString(1222), irr::core::rect<irr::s32>(10, 390, 220, 410), false, false, wLanWindow);
 	ebJoinPass = env->addEditBox(gameConf.roompass, irr::core::rect<irr::s32>(110, 385, 420, 410), true, wLanWindow);
 	ebJoinPass->setTextAlignment(irr::gui::EGUIA_CENTER, irr::gui::EGUIA_CENTER);
+	ebJoinPass->setPasswordBox(true);
 	btnJoinHost = env->addButton(irr::core::rect<irr::s32>(460, 355, 570, 380), wLanWindow, BUTTON_JOIN_HOST, dataManager.GetSysString(1223));
 	btnJoinCancel = env->addButton(irr::core::rect<irr::s32>(460, 385, 570, 410), wLanWindow, BUTTON_JOIN_CANCEL, dataManager.GetSysString(1212));
 	btnCreateHost = env->addButton(irr::core::rect<irr::s32>(460, 25, 570, 50), wLanWindow, BUTTON_CREATE_HOST, dataManager.GetSysString(1224));
@@ -317,6 +393,7 @@ bool Game::Initialize() {
 	ebServerName->setTextAlignment(irr::gui::EGUIA_CENTER, irr::gui::EGUIA_CENTER);
 	env->addStaticText(dataManager.GetSysString(1235), irr::core::rect<irr::s32>(10, 390, 220, 410), false, false, wCreateHost);
 	ebServerPass = env->addEditBox(L"", irr::core::rect<irr::s32>(110, 385, 250, 410), true, wCreateHost);
+	ebServerPass->setPasswordBox(true);
 	ebServerPass->setTextAlignment(irr::gui::EGUIA_CENTER, irr::gui::EGUIA_CENTER);
 	btnHostConfirm = env->addButton(irr::core::rect<irr::s32>(260, 355, 370, 380), wCreateHost, BUTTON_HOST_CONFIRM, dataManager.GetSysString(1211));
 	btnHostCancel = env->addButton(irr::core::rect<irr::s32>(260, 385, 370, 410), wCreateHost, BUTTON_HOST_CANCEL, dataManager.GetSysString(1212));
@@ -521,6 +598,16 @@ bool Game::Initialize() {
 	chkMusicMode = env->addCheckBox(false, irr::core::rect<irr::s32>(posX, posY, posX + chkBoxLabelWidth, posY + 25), tabSystem, -1, dataManager.GetSysString(1281));
 	chkMusicMode->setChecked(gameConf.music_mode != 0);
 	elmTabSystemLast = chkMusicMode;
+	// Theme is a system setting; keep it in the existing scrollable Settings tab.
+	posY += 38;
+	env->addStaticText(L"Theme", irr::core::rect<irr::s32>(posX, posY, posX + 240, posY + 22), false, false, tabSystem);
+	posY += 24;
+	cbTheme = env->addComboBox(irr::core::rect<irr::s32>(posX, posY, posX + 240, posY + 26), tabSystem, COMBOBOX_THEME);
+	cbTheme->addItem(L"Classic");
+	if(themeManager.IsAvailable("gilded"))
+		cbTheme->addItem(L"Gilded Duel Terminal");
+	cbTheme->setSelected(0);
+	elmTabSystemLast = cbTheme;
 	//
 	wHand = env->addWindow(irr::core::rect<irr::s32>(500, 450, 825, 605), false, L"");
 	wHand->getCloseButton()->setVisible(false);
@@ -868,9 +955,9 @@ bool Game::Initialize() {
 	btnRenameReplay = env->addButton(irr::core::rect<irr::s32>(360, 385, 460, 410), wReplay, BUTTON_RENAME_REPLAY, dataManager.GetSysString(1362));
 	btnReplayCancel = env->addButton(irr::core::rect<irr::s32>(470, 385, 570, 410), wReplay, BUTTON_CANCEL_REPLAY, dataManager.GetSysString(1347));
 	btnExportDeck = env->addButton(irr::core::rect<irr::s32>(470, 325, 570, 350), wReplay, BUTTON_EXPORT_DECK, dataManager.GetSysString(1369));
-	env->addStaticText(dataManager.GetSysString(1349), irr::core::rect<irr::s32>(360, 30, 570, 50), false, true, wReplay);
+	stReplayHeading = env->addStaticText(dataManager.GetSysString(1349), irr::core::rect<irr::s32>(360, 30, 570, 50), false, true, wReplay);
 	stReplayInfo = env->addStaticText(L"", irr::core::rect<irr::s32>(360, 60, 570, 320), false, true, wReplay);
-	env->addStaticText(dataManager.GetSysString(1353), irr::core::rect<irr::s32>(360, 275, 570, 295), false, true, wReplay);
+	stReplayStartTurn = env->addStaticText(dataManager.GetSysString(1353), irr::core::rect<irr::s32>(360, 275, 570, 295), false, true, wReplay);
 	ebRepStartTurn = env->addEditBox(L"", irr::core::rect<irr::s32>(360, 300, 460, 320), true, wReplay, -1);
 	ebRepStartTurn->setTextAlignment(irr::gui::EGUIA_CENTER, irr::gui::EGUIA_CENTER);
 	//single play window
@@ -1009,6 +1096,7 @@ bool Game::Initialize() {
 		col.setAlpha(224);
 		env->getSkin()->setColor((irr::gui::EGUI_DEFAULT_COLOR)i, col);
 	}
+	SelectTheme(gameConf.theme_id);
 	window_size = driver->getScreenSize();
 	xScale = window_size.Width / static_cast<float>(GAME_WINDOW_WIDTH);
 	yScale = window_size.Height / static_cast<float>(GAME_WINDOW_HEIGHT);
@@ -1018,13 +1106,71 @@ bool Game::Initialize() {
 	return true;
 }
 void Game::MainLoop() {
+#ifdef YGOPROMCP_HTTP_PROBE
+	const char* probeDir = std::getenv("YGOPROMCP_HTTP_PROBE_DIR");
+	const bool probeSkipUi = std::getenv("YGOPROMCP_HTTP_PROBE_SKIP_UI") != nullptr;
+	const bool probeControls = std::getenv("YGOPROMCP_HTTP_PROBE_CONTROLS") != nullptr;
+	const bool probeInputs = std::getenv("YGOPROMCP_HTTP_PROBE_INPUTS") != nullptr;
+	const bool probeDataUi = std::getenv("YGOPROMCP_HTTP_PROBE_DATA_UI") != nullptr;
+	const bool probeUpdateUi = std::getenv("YGOPROMCP_HTTP_PROBE_UPDATE_UI") != nullptr;
+	const bool probeUpdateCancel = std::getenv("YGOPROMCP_HTTP_PROBE_UPDATE_CANCEL") != nullptr;
+	const bool probeUpdateRestore = std::getenv("YGOPROMCP_HTTP_PROBE_UPDATE_RESTORE") != nullptr;
+	const bool probeHealthOnly = std::getenv("YGOPROMCP_HTTP_PROBE_HEALTH_ONLY") != nullptr;
+	const bool probeFailAccept = std::getenv("YGOPROMCP_HTTP_PROBE_FAIL_ACCEPT") != nullptr;
+	const auto probeStart = std::chrono::steady_clock::now();
+	int probeStage = 0;
+	auto probeDownloadStart = std::chrono::steady_clock::time_point{};
+	bool probeEndpointWritten = false;
+	bool probeAcceptBroken = false;
+	bool probeFailureCaptured = false;
+	const auto probePath = [probeDir](const char* name) {
+		return std::string(probeDir ? probeDir : "") + "/" + name;
+	};
+	const auto probeCapture = [this, &probePath](const char* name) {
+		if(FILE* trace = std::fopen(probePath("window-states.txt").c_str(), "ab")) {
+			std::fprintf(trace, "%s menu=%d lan=%d mcp=%d settings=%d\n", name,
+				wMainMenu->isVisible(), wLanWindow->isVisible(), wMcpPanel->isVisible(),
+				wHomeSettings->isVisible());
+			std::fclose(trace);
+		}
+		auto* image = driver->createScreenShot(irr::video::ECF_A8R8G8B8);
+		if(image) {
+			driver->writeImageToFile(image, probePath(name).c_str());
+			image->drop();
+		}
+	};
+	const auto probeThemeEvent = [this](int selected) {
+		cbHomeTheme->setSelected(selected);
+		irr::SEvent event{};
+		event.EventType = irr::EET_GUI_EVENT;
+		event.GUIEvent.EventType = irr::gui::EGET_COMBO_BOX_CHANGED;
+		event.GUIEvent.Caller = cbHomeTheme;
+		device->postEventFromUser(event);
+	};
+	const auto probeUpdateState = [this, &probePath](const char* phase) {
+		if(FILE* out = std::fopen(probePath("update-ui-states.txt").c_str(), "ab")) {
+			const auto status = BufferIO::EncodeUTF8String(stUpdateStatus->getText());
+			const auto detail = BufferIO::EncodeUTF8String(stUpdateDetail->getText());
+			std::fprintf(out, "%s status=%s detail=%s check=%d download=%d apply=%d restore=%d cancel=%d\n",
+				phase, status.c_str(), detail.c_str(), btnUpdateCheck->isEnabled(),
+				btnUpdateDownload->isEnabled(), btnUpdateApply->isEnabled(),
+				btnUpdateRestore->isEnabled(), btnUpdateCancel->isEnabled());
+			std::fclose(out);
+		}
+	};
+#endif
 	wchar_t cap[256];
 	camera = smgr->addCameraSceneNode(0);
+	if(gameConf.modern_field_view)
+		matManager.UseModernZones();
 	irr::core::matrix4 mProjection;
-	BuildProjectionMatrix(mProjection, -0.90f, 0.45f, -0.42f, 0.42f, 1.0f, 100.0f);
+	const auto fieldProjection = GetFieldProjectionForView(window_size.Width, window_size.Height,
+		gameConf.modern_field_view || gameConf.preserve_field_aspect, gameConf.modern_field_view);
+	BuildProjectionMatrix(mProjection, fieldProjection.left, fieldProjection.right, fieldProjection.bottom, fieldProjection.top, 1.0f, 100.0f);
 	camera->setProjectionMatrix(mProjection);
 
-	mProjection.buildCameraLookAtMatrixLH(irr::core::vector3df(4.2f, 8.0f, 7.8f), irr::core::vector3df(4.2f, 0, 0), irr::core::vector3df(0, 0, 1));
+	const auto fieldCamera = GetFieldCamera(gameConf.modern_field_view);
+	mProjection.buildCameraLookAtMatrixLH(irr::core::vector3df(4.2f, fieldCamera.y, fieldCamera.z), irr::core::vector3df(4.2f, 0, 0), irr::core::vector3df(0, 0, 1));
 	camera->setViewMatrixAffector(mProjection);
 	smgr->setAmbientLight(irr::video::SColorf(1.0f, 1.0f, 1.0f));
 	float atkframe = 0.1f;
@@ -1067,7 +1213,10 @@ void Game::MainLoop() {
 				soundManager.PlayBGM(BGM_ADVANTAGE);
 			else
 				soundManager.PlayBGM(BGM_DUEL);
-			DrawBackImage(imageManager.tBackGround);
+			if(themeManager.HasVisualStyle())
+				themeManager.DrawBackdrop(driver, Resize(0, 0, GAME_WINDOW_WIDTH, GAME_WINDOW_HEIGHT));
+			else
+				DrawBackImage(imageManager.tBackGround);
 			DrawBackGround();
 			DrawCards();
 			DrawMisc();
@@ -1076,16 +1225,46 @@ void Game::MainLoop() {
 			driver->clearZBuffer();
 		} else if(is_building) {
 			soundManager.PlayBGM(BGM_DECK);
-			DrawBackImage(imageManager.tBackGround_deck);
+			if(themeManager.HasVisualStyle())
+				themeManager.DrawBackdrop(driver, Resize(0, 0, GAME_WINDOW_WIDTH, GAME_WINDOW_HEIGHT));
+			else
+				DrawBackImage(imageManager.tBackGround_deck);
 			DrawDeckBd();
 		} else {
 			soundManager.PlayBGM(BGM_MENU);
-			DrawBackImage(imageManager.tBackGround_menu);
+			if(themeManager.HasVisualStyle()) {
+				themeManager.DrawBackdrop(driver, Resize(0, 0, GAME_WINDOW_WIDTH, GAME_WINDOW_HEIGHT));
+				// Header art is anchored to the viewport, independent of the
+				// currently open Home, LAN, Replay, MCP, or Settings window.
+				const bool compactLogo = window_size.Width < 1360 || window_size.Height < 900;
+				themeManager.DrawLogo(driver, compactLogo ?
+					irr::core::recti(32, 10, 352, 63) : irr::core::recti(80, 45, 680, 145));
+				if(wMainMenu->isVisible() && window_size.Width >= 1024 && imageManager.tCover[0]) {
+					const auto card = Resize(700, 155, 835, 365);
+					const auto size = imageManager.tCover[0]->getOriginalSize();
+					driver->draw2DImage(imageManager.tCover[0], card,
+						irr::core::recti(0, 0, size.Width, size.Height), nullptr, nullptr, true);
+					driver->draw2DRectangleOutline(card, themeManager.GetDeckFrameColor());
+				}
+			} else
+				DrawBackImage(imageManager.tBackGround_menu);
+		}
+		// Compact selectors can shorten a deck name visually. Keep the exact
+		// selected value available without changing the real combo item or deck ID.
+		if(is_building && themeManager.HasVisualStyle()) {
+			for(auto* box : {cbDBCategory, cbDBDecks}) {
+				const int selected = box->getSelected();
+				const wchar_t* value = selected >= 0 ? box->getItem(selected) : L"";
+				if(std::wcscmp(box->getToolTipText().c_str(), value))
+					box->setToolTipText(value);
+			}
 		}
 		DrawGUI();
 		DrawSpec();
 		gMutex.unlock();
 		MCP_Poll();
+		CardUpdateUiPoll(*this);
+		UpdateMcpHomeStatus();
 		if(signalFrame > 0) {
 			signalFrame--;
 			if(!signalFrame)
@@ -1102,6 +1281,297 @@ void Game::MainLoop() {
 			}
 		}
 		driver->endScene();
+#ifdef YGOPROMCP_HTTP_PROBE
+		if(probeDir) {
+			const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+				std::chrono::steady_clock::now() - probeStart).count();
+			if(probeFailAccept && elapsed > 2000 && !probeAcceptBroken) {
+				MCP_HTTP_ProbeBreakListener();
+				probeAcceptBroken = true;
+			}
+			if(probeFailAccept && elapsed > 4500 && !probeFailureCaptured) {
+				probeCapture("listener-error.png");
+				probeFailureCaptured = true;
+			}
+			if(!probeEndpointWritten && MCP_HTTP_IsRunning()) {
+				const auto endpoint = MCP_HTTP_Endpoint();
+				if(FILE* out = std::fopen(probePath("endpoint-1.txt").c_str(), "wb")) {
+					std::fwrite(endpoint.data(), 1, endpoint.size(), out);
+					std::fclose(out);
+					probeEndpointWritten = true;
+				}
+			}
+			if(probeUpdateUi) {
+				if(probeStage == 0 && elapsed > 500) {
+					ClickButton(btnSettingsOpen);
+					ClickButton(btnGameDataOpen);
+					probeStage = 1;
+				} else if(probeUpdateRestore && probeStage == 1 &&
+					elapsed > 1300 && btnUpdateRestore->isEnabled()) {
+					probeUpdateState("installed-restore-available");
+					probeCapture("update-installed.png");
+					ClickButton(btnUpdateRestore);
+					probeStage = 2;
+				} else if(probeUpdateRestore && probeStage == 2 &&
+					btnUpdateCheck->isEnabled() && btnUpdateCancel->isEnabled()) {
+					probeUpdateState("restore-scheduled");
+					probeDownloadStart = std::chrono::steady_clock::now();
+					probeStage = 3;
+				} else if(probeUpdateRestore && probeStage == 3 &&
+					std::chrono::steady_clock::now() - probeDownloadStart > std::chrono::milliseconds(100)) {
+					probeCapture("update-restore-scheduled.png");
+					probeStage = 99;
+				} else if(!probeUpdateRestore && probeStage == 1 && elapsed > 1300 && btnUpdateCheck->isEnabled()) {
+					probeUpdateState("status");
+					probeCapture("update-status.png");
+					ClickButton(btnUpdateCheck);
+					probeStage = 2;
+				} else if(probeStage == 2 && elapsed > 1800 && btnUpdateCheck->isEnabled()) {
+					probeUpdateState("checked");
+					probeCapture("update-checked.png");
+					if(btnUpdateDownload->isEnabled()) {
+						ClickButton(btnUpdateDownload);
+						probeDownloadStart = std::chrono::steady_clock::now();
+						probeStage = 3;
+					} else probeStage = 99;
+				} else if(probeUpdateCancel && probeStage == 3 &&
+					std::chrono::steady_clock::now() - probeDownloadStart > std::chrono::milliseconds(150) &&
+					btnUpdateCancel->isEnabled() && !btnUpdateCheck->isEnabled()) {
+					probeUpdateState("cancel-requested");
+					ClickButton(btnUpdateCancel);
+					probeStage = 30;
+				} else if(probeUpdateCancel && probeStage == 30 && btnUpdateCheck->isEnabled() &&
+					!std::wcscmp(stUpdateStatus->getText(), L"Canceled")) {
+					probeUpdateState("cancel-complete");
+					ClickButton(btnUpdateCheck);
+					probeStage = 31;
+				} else if(probeUpdateCancel && probeStage == 31 && btnUpdateDownload->isEnabled() &&
+					btnUpdateCheck->isEnabled()) {
+					ClickButton(btnUpdateDownload);
+					probeStage = 32;
+				} else if(probeUpdateCancel && probeStage == 32 && btnUpdateApply->isEnabled() &&
+					btnUpdateCheck->isEnabled()) {
+					probeUpdateState("resumed-download");
+					probeCapture("update-resumed.png");
+					probeStage = 99;
+				} else if(!probeUpdateCancel && !probeUpdateRestore && probeStage == 3 && btnUpdateCheck->isEnabled()) {
+					probeUpdateState("downloaded");
+					probeCapture("update-downloaded.png");
+					if(btnUpdateApply->isEnabled()) {
+						ClickButton(btnUpdateApply);
+						probeStage = 4;
+					} else probeStage = 99;
+				} else if(probeStage == 4 && btnUpdateCheck->isEnabled()) {
+					probeUpdateState("scheduled");
+					probeCapture("update-scheduled.png");
+					if(btnUpdateCancel->isEnabled()) {
+						ClickButton(btnUpdateCancel);
+						probeStage = 5;
+					} else probeStage = 99;
+				} else if(probeStage == 5 && btnUpdateCheck->isEnabled()) {
+					probeUpdateState("canceled");
+					probeCapture("update-canceled.png");
+					probeStage = 99;
+				}
+			} else if(probeDataUi) {
+				if(probeStage == 0 && elapsed > 500) {
+					if(wMcpPanel->isVisible()) ClickButton(btnMcpClose);
+					btnGameDataOpen->setVisible(true);
+					ClickButton(btnSettingsOpen);
+					probeStage = 1;
+				} else if(probeStage == 1 && elapsed > 1300) {
+					probeCapture("settings-entry-gilded.png");
+					ClickButton(btnGameDataOpen);
+					probeStage = 2;
+				} else if(probeStage == 2 && elapsed > 2200) {
+					probeCapture("game-data-gilded.png");
+					ClickButton(btnGameDataClose);
+					probeThemeEvent(0);
+					ClickButton(btnGameDataOpen);
+					probeStage = 3;
+				} else if(probeStage == 3 && elapsed > 3200) {
+					probeCapture("game-data-classic.png");
+					probeStage = 4;
+				}
+			} else if(probeInputs) {
+				if(probeStage == 0 && elapsed > 500) {
+					ClickButton(btnMcpClose);
+					ClickButton(btnLanMode);
+					ebJoinHost->setText(L"");
+					env->setFocus(ebJoinHost);
+					probeStage = 1;
+				} else if(probeStage == 1 && elapsed > 1400) {
+					ebJoinHost->setText(L"");
+					env->setFocus(ebJoinHost);
+					const bool initialFocus = env->getFocus() == ebJoinHost;
+					const auto key = [this](irr::EKEY_CODE code, wchar_t character = 0,
+						bool control = false, bool shift = false) {
+						irr::SEvent event{};
+						event.EventType = irr::EET_KEY_INPUT_EVENT;
+						event.KeyInput.Key = code;
+						event.KeyInput.Char = character;
+						event.KeyInput.Control = control;
+						event.KeyInput.Shift = shift;
+						event.KeyInput.PressedDown = true;
+						device->postEventFromUser(event);
+						event.KeyInput.PressedDown = false;
+						device->postEventFromUser(event);
+					};
+					key(irr::KEY_KEY_A, L'a');
+					key(irr::KEY_KEY_B, L'b');
+					key(irr::KEY_KEY_C, L'c');
+					const std::wstring typedValue = ebJoinHost->getText();
+					const bool typed = !std::wcscmp(ebJoinHost->getText(), L"abc");
+					key(irr::KEY_LEFT);
+					key(irr::KEY_KEY_X, L'x');
+					const std::wstring caretValue = ebJoinHost->getText();
+					const bool caret = !std::wcscmp(ebJoinHost->getText(), L"abxc");
+					key(irr::KEY_LEFT, 0, false, true);
+					key(irr::KEY_DELETE);
+					const std::wstring selectionValue = ebJoinHost->getText();
+					const bool selection = !std::wcscmp(ebJoinHost->getText(), L"abc");
+					key(irr::KEY_KEY_A, 0, true);
+					key(irr::KEY_DELETE);
+					const bool deletion = !std::wcscmp(ebJoinHost->getText(), L"");
+					env->setFocus(ebNickName);
+					key(irr::KEY_TAB);
+					const bool tab = env->getFocus() != ebNickName && env->getFocus() != nullptr;
+					const bool masked = ebJoinPass->isPasswordBox() && ebServerPass->isPasswordBox();
+					ebJoinPass->setText(L"testpass");
+					// Exercise the native button press and release path, including a
+					// release outside the button. Neither path starts a LAN game.
+					const auto button = btnCreateHost->getAbsolutePosition();
+					const int bx = (button.UpperLeftCorner.X + button.LowerRightCorner.X) / 2;
+					const int by = (button.UpperLeftCorner.Y + button.LowerRightCorner.Y) / 2;
+					const auto mouse = [this](irr::EMOUSE_INPUT_EVENT type, int x, int y,
+						irr::u32 buttons) {
+						irr::SEvent event{};
+						event.EventType = irr::EET_MOUSE_INPUT_EVENT;
+						event.MouseInput.Event = type;
+						event.MouseInput.X = x;
+						event.MouseInput.Y = y;
+						event.MouseInput.ButtonStates = buttons;
+						device->postEventFromUser(event);
+					};
+					mouse(irr::EMIE_MOUSE_MOVED, bx, by, 0);
+					mouse(irr::EMIE_LMOUSE_PRESSED_DOWN, bx, by, irr::EMBSM_LEFT);
+					const bool pressed = btnCreateHost->isPressed();
+					mouse(irr::EMIE_MOUSE_MOVED, 20, 20, irr::EMBSM_LEFT);
+					mouse(irr::EMIE_LMOUSE_LEFT_UP, 20, 20, 0);
+					const bool cancelled = !wCreateHost->isVisible();
+					mouse(irr::EMIE_MOUSE_MOVED, bx, by, 0);
+					mouse(irr::EMIE_LMOUSE_PRESSED_DOWN, bx, by, irr::EMBSM_LEFT);
+					mouse(irr::EMIE_LMOUSE_LEFT_UP, bx, by, 0);
+					const bool clicked = wCreateHost->isVisible();
+					if(clicked) ClickButton(btnHostCancel);
+					if(FILE* out = std::fopen(probePath("native-input-results.txt").c_str(), "wb")) {
+						std::fprintf(out, "typed=%d caret=%d selection=%d deletion=%d tab=%d masked=%d focus=%d pressed=%d cancelled=%d clicked=%d\nvalues=%ls|%ls|%ls\n",
+							typed, caret, selection, deletion, tab, masked, initialFocus,
+							pressed, cancelled, clicked,
+							typedValue.c_str(), caretValue.c_str(), selectionValue.c_str());
+						std::fclose(out);
+					}
+					probeStage = 2;
+				} else if(probeStage == 2 && elapsed > 2400) {
+					probeCapture("native-password.png");
+					if(MCP_HTTP_IsRunning()) MCP_HTTP_Stop();
+					ClickButton(btnJoinCancel);
+					ClickButton(btnMcpOpen);
+					ebMcpPort->setText(L"70000");
+					ClickButton(btnMcpToggle);
+					probeStage = 3;
+				} else if(probeStage == 3 && elapsed > 3400) {
+					probeCapture("native-invalid-port.png");
+					if(FILE* out = std::fopen(probePath("invalid-port-result.txt").c_str(), "wb")) {
+						std::fprintf(out, "rejected=%d status=%d\n", !MCP_HTTP_IsRunning(),
+							std::wcsstr(stMcpStatus->getText(), L"Error:") == stMcpStatus->getText());
+						std::fclose(out);
+					}
+					probeStage = 4;
+				}
+			} else if(probeControls) {
+				if(probeStage == 0 && elapsed > 500) {
+					ClickButton(btnMcpClose);
+					probeStage = 1;
+				} else if(probeStage == 1 && elapsed > 1500) {
+					probeCapture("controls-home.png");
+					ClickButton(btnLanMode);
+					probeStage = 2;
+				} else if(probeStage == 2 && elapsed > 3000) {
+					probeCapture("controls-lan.png");
+					ebJoinHost->setText(L"127.0.0.1");
+					env->setFocus(ebJoinHost);
+					probeStage = 3;
+				} else if(probeStage == 3 && elapsed > 4500) {
+					probeCapture("controls-edit-focus.png");
+					ClickButton(btnCreateHost);
+					probeStage = 4;
+				} else if(probeStage == 4 && elapsed > 6000) {
+					probeCapture("controls-create-form.png");
+					ClickButton(btnHostCancel);
+					ClickButton(btnJoinCancel);
+					ClickButton(btnReplayMode);
+					probeStage = 5;
+				} else if(probeStage == 5 && elapsed > 8000) {
+					probeCapture("controls-replay.png");
+					ClickButton(btnReplayCancel);
+					ClickButton(btnDeckEdit);
+					probeStage = 6;
+				} else if(probeStage == 6 && elapsed > 10500) {
+					const auto matchesSelected = [](irr::gui::IGUIComboBox* box) {
+						const int selected = box->getSelected();
+						return selected >= 0 && !std::wcscmp(box->getToolTipText().c_str(),
+							box->getItem(selected));
+					};
+					if(FILE* out = std::fopen(probePath("deck-tooltip-results.txt").c_str(), "wb")) {
+						std::fprintf(out, "category=%d deck=%d\n",
+							matchesSelected(cbDBCategory), matchesSelected(cbDBDecks));
+						std::fclose(out);
+					}
+					probeCapture("controls-deck.png");
+					probeStage = 7;
+				}
+			} else if(!probeSkipUi && probeStage == 0 && elapsed > 1500) {
+				probeCapture("mcp-listening.png");
+				ClickButton(btnMcpClose);
+				ClickButton(btnSettingsOpen);
+				probeStage = 1;
+			} else if(probeStage == 1 && elapsed > 3500) {
+				probeCapture("settings-gilded.png");
+				probeThemeEvent(0);
+				probeStage = 2;
+			} else if(probeStage == 2 && elapsed > 5500) {
+				probeCapture("settings-classic.png");
+				probeThemeEvent(1);
+				probeStage = 3;
+			} else if(probeStage == 3 && elapsed > 7500) {
+				probeCapture("settings-gilded-restored.png");
+				ClickButton(btnSettingsClose);
+				probeStage = 4;
+			} else if(probeStage == 4 && elapsed > 9500) {
+				probeCapture("home-gilded.png");
+				ClickButton(btnMcpOpen);
+				ClickButton(btnMcpToggle);
+				probeStage = 5;
+			} else if(probeStage == 5 && elapsed > 11500) {
+				probeCapture("mcp-stopped.png");
+				ClickButton(btnMcpToggle);
+				probeStage = 6;
+			} else if(probeStage == 6 && elapsed > 13500) {
+				probeCapture("mcp-reenabled.png");
+				const auto endpoint = MCP_HTTP_Endpoint();
+				if(FILE* out = std::fopen(probePath("endpoint-2.txt").c_str(), "wb")) {
+					std::fwrite(endpoint.data(), 1, endpoint.size(), out);
+					std::fclose(out);
+				}
+				probeStage = 7;
+			}
+			if((probeUpdateUi && probeStage == 99) || (probeHealthOnly && elapsed > 3500) ||
+				elapsed > (probeUpdateUi ? 120000 : (probeFailAccept ? 6500 : (probeDataUi ? 4300 : (probeInputs ? 4800 :
+				(probeControls ? 12500 : (probeSkipUi ? 38000 : 21000)))))))
+				device->closeDevice();
+		}
+#endif
 		if(closeSignal.TryWait())
 			CloseDuelWindow();
 		fps++;
@@ -1164,6 +1634,15 @@ void Game::MainLoop() {
 	std::this_thread::sleep_for(std::chrono::milliseconds(500));
 	SaveConfig();
 	device->drop();
+}
+irr::core::matrix4 Game::GetCardRenderTransform(const ClientCard* pcard) const {
+	auto transform = pcard->mTransform;
+	if(gameConf.modern_field_view && pcard->location == LOCATION_HAND && pcard->controler == 0) {
+		irr::core::matrix4 scale;
+		scale.setScale(irr::core::vector3df(MODERN_HAND_SCALE, MODERN_HAND_SCALE, 1.0f));
+		transform *= scale;
+	}
+	return transform;
 }
 void Game::BuildProjectionMatrix(irr::core::matrix4& mProjection, irr::f32 left, irr::f32 right, irr::f32 bottom, irr::f32 top, irr::f32 znear, irr::f32 zfar) {
 	for(int i = 0; i < 16; ++i)
@@ -1240,6 +1719,10 @@ std::wstring Game::SetStaticText(irr::gui::IGUIStaticText* pControl, irr::u32 cW
 	return result;
 }
 void Game::LoadExpansions() {
+	managedArchiveMounted = false;
+	managedReleaseDatabaseLoaded = false;
+	managedUpdateDatabaseLoaded = false;
+	managedProbeScript.clear();
 	FileSystem::TraversalDir("./expansions", [](const char* name, bool isdir) {
 		if (isdir)
 			return;
@@ -1260,16 +1743,31 @@ void Game::LoadExpansions() {
 			return;
 		}
 		if (IsExtension(name, ".zip") || IsExtension(name, ".ypk")) {
-			dataManager.IrrFileSystem->addFileArchive(fpath, true, false, irr::io::EFAT_ZIP);
+			const bool mounted = dataManager.IrrFileSystem->addFileArchive(
+				fpath, true, false, irr::io::EFAT_ZIP);
+			if (!std::strcmp(name, "ygopro-super-pre.ypk"))
+				mainGame->managedArchiveMounted = mounted;
 			return;
 		}
 	});
 	for(irr::u32 i = 0; i < dataManager.IrrFileSystem->getFileArchiveCount(); ++i) {
-		auto archive = dataManager.IrrFileSystem->getFileArchive(i)->getFileList();
+		auto* fileArchive = dataManager.IrrFileSystem->getFileArchive(i);
+		const char* archiveName = fileArchive->getArchiveName().c_str();
+		const char* slash = std::strrchr(archiveName, '/');
+		const char* backslash = std::strrchr(archiveName, '\\');
+		const char* basename = std::max(slash ? slash + 1 : archiveName,
+			backslash ? backslash + 1 : archiveName);
+		const bool managed = !std::strcmp(basename, "ygopro-super-pre.ypk");
+		auto archive = fileArchive->getFileList();
 		for(irr::u32 j = 0; j < archive->getFileCount(); ++j) {
 			const char* name = archive->getFullFileName(j).c_str();
 			if (IsExtension(name, ".cdb")) {
-				if (!dataManager.LoadDB(name)) {
+				const bool loaded = dataManager.LoadDB(name);
+				if(managed && !std::strcmp(name, "test-release.cdb"))
+					managedReleaseDatabaseLoaded = loaded;
+				if(managed && !std::strcmp(name, "test-update.cdb"))
+					managedUpdateDatabaseLoaded = loaded;
+				if (!loaded) {
 					std::string errmsg = "Warning: Failed to load DB file in expansion archive (";
 					errmsg.append(dataManager.IrrFileSystem->getFileArchive(i)->getArchiveName().c_str());
 					errmsg.append(" : ");
@@ -1280,6 +1778,9 @@ void Game::LoadExpansions() {
 				}
 				continue;
 			}
+			if(managed && managedProbeScript.empty() &&
+				!std::strncmp(name, "script/c", 8) && IsExtension(name, ".lua"))
+				managedProbeScript = name;
 			if (IsExtension(name, ".conf")) {
 				auto reader = dataManager.IrrFileSystem->createAndOpenFile(name);
 				dataManager.LoadStrings(reader);
@@ -1455,6 +1956,9 @@ void Game::LoadConfig(const char* file) {
 			gameConf.enable_log = std::strtol(valbuf, nullptr, 10) & 0xff;
 		} else if(!std::strcmp(strbuf, "serverport")) {
 			gameConf.serverport = std::strtol(valbuf, nullptr, 10);
+		} else if(!std::strcmp(strbuf, "mcp_port")) {
+			const long port = std::strtol(valbuf, nullptr, 10);
+			if(port > 0 && port <= 65535) gameConf.mcp_port = static_cast<int>(port);
 		} else if(!std::strcmp(strbuf, "local_host_only")) {
 			gameConf.local_host_only = std::strtol(valbuf, nullptr, 10) > 0;
 		} else if(!std::strcmp(strbuf, "lasthost")) {
@@ -1493,6 +1997,12 @@ void Game::LoadConfig(const char* file) {
 			gameConf.control_mode = std::strtol(valbuf, nullptr, 10);
 		} else if(!std::strcmp(strbuf, "draw_field_spell")) {
 			gameConf.draw_field_spell = std::strtol(valbuf, nullptr, 10);
+		} else if(!std::strcmp(strbuf, "preserve_field_aspect")) {
+			gameConf.preserve_field_aspect = std::strtol(valbuf, nullptr, 10) != 0;
+		} else if(!std::strcmp(strbuf, "modern_field_view")) {
+			gameConf.modern_field_view = std::strtol(valbuf, nullptr, 10) != 0;
+		} else if(!std::strcmp(strbuf, "theme")) {
+			gameConf.theme_id = valbuf;
 		} else if(!std::strcmp(strbuf, "separate_clear_button")) {
 			gameConf.separate_clear_button = std::strtol(valbuf, nullptr, 10);
 		} else if(!std::strcmp(strbuf, "auto_search_limit")) {
@@ -1578,6 +2088,243 @@ void Game::LoadConfig(const char* file) {
 	}
 	std::fclose(fp);
 }
+bool Game::SelectTheme(const std::string& id) {
+	std::string error;
+	const bool selected = themeManager.Select(id, env, driver, &error);
+	gameConf.theme_id = themeManager.ActiveId();
+	if(cbTheme)
+		cbTheme->setSelected(gameConf.theme_id == "gilded" ? 1 : 0);
+	if(cbHomeTheme)
+		cbHomeTheme->setSelected(gameConf.theme_id == "gilded" ? 1 : 0);
+	ApplyThemeMenuLayout();
+	ApplyThemeBrowserLayout();
+	ApplyThemeDeckCompactLayout();
+	ApplyThemeAppearanceLayout();
+	ApplyThemeTypography();
+	if(wCardImg)
+		wCardImg->setBackgroundColor(themeManager.HasVisualStyle() ?
+			themeManager.GetDeckPanelColor() : irr::video::SColor(0xc0c0c0c0));
+	const auto metadataColor = themeManager.HasVisualStyle() ? themeManager.GetFocusColor() :
+		irr::video::SColor(255, 0, 0, 255);
+	if(stInfo) stInfo->setOverrideColor(metadataColor);
+	if(stDataInfo) stDataInfo->setOverrideColor(metadataColor);
+	if(stSetName) stSetName->setOverrideColor(metadataColor);
+	if(!themeManager.HasVisualStyle()) {
+		if(cbDBDecks) cbDBDecks->setToolTipText(nullptr);
+		if(cbDBCategory) cbDBCategory->setToolTipText(nullptr);
+	}
+	if(!selected)
+		std::fprintf(stderr, "Theme selection fell back to Classic: %s\n", error.c_str());
+	return selected;
+}
+void Game::UpdateMcpHomeStatus() {
+	if(!stMcpStatus || !btnMcpToggle)
+		return;
+	const auto listenerFailure = MCP_HTTP_TakeFailure();
+	if(!listenerFailure.empty()) {
+		MCP_HTTP_Stop();
+		mcpStatusError = BufferIO::DecodeUTF8String(listenerFailure);
+	}
+	const bool listening = MCP_HTTP_IsRunning();
+	btnMcpToggle->setText(listening ? L"Disable MCP" : L"Enable MCP");
+	ebMcpPort->setEnabled(!listening);
+	btnMcpCopy->setEnabled(listening);
+	std::wstring status = listening ?
+		(MCP_HTTP_ActiveRequestCount() ? L"Listening  |  request active" : L"Listening on this PC") :
+		(mcpStatusError.empty() ? L"Stopped" : L"Error: " + mcpStatusError);
+	if(status != stMcpStatus->getText()) stMcpStatus->setText(status.c_str());
+	stMcpStatus->setOverrideColor(listening ?
+		(themeManager.HasVisualStyle() ? themeManager.GetFocusColor() : irr::video::SColor(255, 20, 105, 40)) :
+		(mcpStatusError.empty() ? irr::video::SColor(255, 220, 220, 220) : irr::video::SColor(255, 245, 100, 100)));
+	const std::wstring endpoint = listening ? BufferIO::DecodeUTF8String(MCP_HTTP_Endpoint()) :
+		L"Enable to get a local connection URL";
+	const std::wstring display = endpoint.size() > 45 ? endpoint.substr(0, 42) + L"..." : endpoint;
+	if(display != stMcpEndpoint->getText()) stMcpEndpoint->setText(display.c_str());
+	stMcpEndpoint->setToolTipText(listening ? endpoint.c_str() : nullptr);
+	if(stMcpHome) {
+		const wchar_t* summary = listening ? L"MCP: listening on this PC" :
+			(mcpStatusError.empty() ? L"MCP: stopped" : L"MCP: check connection settings");
+		if(std::wcscmp(stMcpHome->getText(), summary)) stMcpHome->setText(summary);
+	}
+}
+void Game::ApplyThemeMenuLayout() {
+	if(!wMainMenu)
+		return;
+	const bool gilded = themeManager.HasVisualStyle();
+	const bool compact = window_size.Width < 1024;
+	wMainMenu->setRelativePosition(gilded ?
+		(compact ? ResizeWin(252, 115, 772, 590) : ResizeWin(50, 65, 570, 585)) :
+		ResizeWin(370, 165, 650, 475));
+	wMcpPanel->setRelativePosition(ResizeWin(250, 155, 774, 475));
+	wHomeSettings->setRelativePosition(ResizeWin(300, 180, 724, 420));
+	wGameDataSettings->setRelativePosition(ResizeWin(232, 105, 792, 535));
+	wchar_t classicTitle[256];
+	myswprintf(classicTitle, L"YGOPro Version:%X.0%X.%X", (PRO_VERSION & 0xf000U) >> 12,
+		(PRO_VERSION & 0x0ff0U) >> 4, PRO_VERSION & 0x000fU);
+	wMainMenu->setText(gilded ? L"Home" : classicTitle);
+	const irr::core::recti classic[] = {
+		{10, 30, 270, 60}, {10, 65, 270, 95}, {10, 100, 270, 130},
+		{10, 135, 270, 165}, {10, 170, 270, 200},
+		{10, 205, 270, 235}, {10, 240, 270, 270}
+	};
+	const irr::core::recti gildedButtons[] = {
+		{28, 52, 492, 102}, {28, 114, 492, 164}, {28, 176, 492, 226},
+		{28, 238, 492, 288}, {28, 300, 492, 350},
+		{28, 362, 492, 412}, {28, 424, 492, 474}
+	};
+	const irr::core::recti compactGildedButtons[] = {
+		{28, 42, 492, 86}, {28, 98, 492, 142}, {28, 154, 492, 198},
+		{28, 210, 492, 254}, {28, 266, 492, 310},
+		{28, 322, 492, 366}, {28, 378, 492, 422}
+	};
+	irr::gui::IGUIButton* buttons[] = {btnLanMode, btnSingleMode, btnReplayMode,
+		btnDeckEdit, btnSettingsOpen, btnMcpOpen, btnModeExit};
+	for(int i = 0; i < 7; ++i)
+		buttons[i]->setRelativePosition(gilded ? (compact ? compactGildedButtons[i] : gildedButtons[i]) : classic[i]);
+	stMcpHome->setRelativePosition(gilded ? (compact ? irr::core::recti(28, 432, 492, 462) : irr::core::recti(28, 480, 492, 510)) :
+		irr::core::recti(10, 278, 270, 301));
+	if(gilded && wMainMenu->isVisible() && (!env->getFocus() || env->getFocus() == wMainMenu))
+		env->setFocus(btnLanMode);
+}
+void Game::ApplyThemeBrowserLayout() {
+	if(!wLanWindow || !wReplay)
+		return;
+	const bool expanded = themeManager.HasVisualStyle() && window_size.Width >= 1360 && window_size.Height >= 900;
+	wLanWindow->setRelativePosition(expanded ? ResizeWin(22, 10, 1002, 630) : ResizeWin(220, 100, 800, 520));
+	wReplay->setRelativePosition(expanded ? ResizeWin(22, 10, 1002, 630) : ResizeWin(220, 100, 800, 520));
+	const auto set = [expanded](irr::gui::IGUIElement* element, const irr::core::recti& classic,
+		const irr::core::recti& gilded) {
+		element->setRelativePosition(expanded ? gilded : classic);
+	};
+	set(stLanNickname, {10, 30, 220, 50}, {25, 46, 145, 76});
+	set(ebNickName, {110, 25, 450, 50}, {150, 40, 580, 82});
+	set(btnCreateHost, {460, 25, 570, 50}, {775, 40, 950, 82});
+	set(lstHostList, {10, 60, 570, 320}, {25, 105, 625, 505});
+	lstHostList->setItemHeight(expanded ? 26 : 18);
+	set(btnLanRefresh, {240, 325, 340, 350}, {25, 530, 190, 575});
+	set(stLanHostIP, {10, 360, 220, 380}, {660, 125, 950, 155});
+	set(ebJoinHost, {110, 355, 350, 380}, {660, 160, 865, 202});
+	set(ebJoinPort, {360, 355, 420, 380}, {875, 160, 950, 202});
+	set(stLanPassword, {10, 390, 220, 410}, {660, 230, 950, 260});
+	set(ebJoinPass, {110, 385, 420, 410}, {660, 265, 950, 307});
+	set(btnJoinHost, {460, 355, 570, 380}, {660, 530, 795, 575});
+	set(btnJoinCancel, {460, 385, 570, 410}, {815, 530, 950, 575});
+	set(lstReplayList, {10, 30, 350, 400}, {25, 65, 520, 555});
+	lstReplayList->setItemHeight(expanded ? 26 : 18);
+	set(stReplayHeading, {360, 30, 570, 50}, {545, 40, 950, 65});
+	set(stReplayInfo, {360, 60, 570, 320}, {545, 75, 950, 425});
+	set(stReplayStartTurn, {360, 275, 570, 295}, {545, 445, 700, 475});
+	set(ebRepStartTurn, {360, 300, 460, 320}, {705, 440, 820, 480});
+	set(btnExportDeck, {470, 325, 570, 350}, {545, 500, 730, 540});
+	set(btnLoadReplay, {470, 355, 570, 380}, {745, 500, 950, 540});
+	set(btnDeleteReplay, {360, 355, 460, 380}, {545, 555, 665, 595});
+	set(btnRenameReplay, {360, 385, 460, 410}, {675, 555, 795, 595});
+	set(btnReplayCancel, {470, 385, 570, 410}, {805, 555, 950, 595});
+}
+void Game::ApplyThemeDeckCompactLayout() {
+	if(!cbCardType || !cbCardType2 || !cbRace || !cbAttribute)
+		return;
+	const bool compact = themeManager.HasVisualStyle() && window_size.Width < 1024;
+	cbCardType->setRelativePosition(Resize(compact ? 80 : 60, 25 / 6,
+		compact ? 133 : 120, 20 + 25 / 6));
+	cbCardType2->setRelativePosition(Resize(compact ? 140 : 125, 25 / 6,
+		195, 20 + 25 / 6));
+	cbRace->setRelativePosition(Resize(compact ? 80 : 60, 40 + 75 / 6, 195, 60 + 75 / 6));
+	cbAttribute->setRelativePosition(Resize(compact ? 80 : 60, 20 + 50 / 6, 195, 40 + 50 / 6));
+	stCategory->setRelativePosition(Resize(10, 2 + 25 / 6, compact ? 80 : 70, 22 + 25 / 6));
+	stAttribute->setRelativePosition(Resize(10, 22 + 50 / 6, compact ? 80 : 70, 42 + 50 / 6));
+}
+void Game::ApplyThemeAppearanceLayout() {
+	if(!cbTheme || !tabSystem)
+		return;
+	const int top = cbTheme->getRelativePosition().UpperLeftCorner.Y;
+	const int width = tabSystem->getRelativePosition().getWidth();
+	cbTheme->setRelativePosition(irr::core::recti(0, top,
+		std::min(240, width - 10), top + 26));
+}
+void Game::ApplyThemeTypography() {
+	if(!env)
+		return;
+	if(themeManager.HasVisualStyle() && !themeGuiFont)
+		themeGuiFont = irr::gui::CGUITTFont::createTTFont(env, gameConf.textfont,
+			std::max<int>(gameConf.textfontsize, 18));
+	if(themeManager.HasVisualStyle() && !themeCompactDeckFont)
+		themeCompactDeckFont = irr::gui::CGUITTFont::createTTFont(env, gameConf.textfont, 10);
+	// The compact layouts retain their original item heights and button geometry.
+	const bool spaciousLayout = window_size.Width >= 1024 && window_size.Height >= 640;
+	auto* font = themeManager.HasVisualStyle() && spaciousLayout ? themeGuiFont : nullptr;
+	const auto compactDeckCaption = [this](irr::gui::IGUIElement* element) {
+		return element == btnManageDeck || element == btnSaveDeck || element == btnSaveDeckAs ||
+			element == btnDeleteDeck || element == btnShuffleDeck || element == btnSortDeck ||
+			element == btnClearDeck || element == btnStartFilter || element == btnClearFilter ||
+			element == btnEffectFilter || element == btnMarksFilter ||
+			element == stDBCategory || element == stDeck || element == stCategory ||
+			element == stLimit || element == stAttribute || element == stRace ||
+			element == stAttack || element == stDefense || element == stStar ||
+			element == stScale || element == stSearch;
+	};
+	// Only controls with fixed captions may keep an enlarged font. Duel prompts,
+	// card details, hint messages, and other labels change after this pass.
+	const auto fixedCaption = [this](irr::gui::IGUIElement* element) {
+		return element == btnLanMode || element == btnSingleMode || element == btnReplayMode ||
+			 element == btnDeckEdit || element == btnModeExit || element == btnSettingsOpen ||
+			 element == btnMcpOpen || element == btnMcpCopy || element == btnMcpClose ||
+			 element == btnSettingsClose || element == btnGameDataOpen ||
+			 element == btnGameDataClose || element == btnGameDataImport ||
+			 element == btnUpdateCheck || element == btnUpdateDownload ||
+			 element == btnUpdateApply || element == btnUpdateRestore ||
+			 element == btnUpdateCancel || element == stMcpLabel || element == btnCreateHost ||
+			element == btnLanRefresh || element == btnJoinHost || element == btnJoinCancel ||
+			element == btnExportDeck || element == btnLoadReplay || element == btnDeleteReplay ||
+			element == btnRenameReplay || element == btnReplayCancel ||
+			element == btnManageDeck || element == btnSaveDeck || element == btnSaveDeckAs ||
+			element == btnDeleteDeck || element == btnShuffleDeck || element == btnSortDeck ||
+			element == btnClearDeck || element == btnStartFilter || element == btnClearFilter ||
+			element == stLanNickname || element == stLanHostIP || element == stLanPassword ||
+			element == stReplayHeading || element == stReplayStartTurn ||
+			element == stDBCategory || element == stDeck || element == stCategory ||
+			element == stLimit || element == stAttribute || element == stRace ||
+			element == stAttack || element == stDefense || element == stStar ||
+			element == stScale || element == stSearch;
+	};
+	const auto visit = [&](auto&& self, irr::gui::IGUIElement* parent) -> void {
+		for(auto it = parent->getChildren().begin(); it != parent->getChildren().end(); ++it) {
+			auto* element = *it;
+			irr::gui::IGUIFont* applied = nullptr;
+			auto* candidate = font && fixedCaption(element) ? font :
+				(themeManager.HasVisualStyle() && !spaciousLayout && compactDeckCaption(element) ?
+					themeCompactDeckFont : nullptr);
+			if(candidate && element->getText()) {
+				const auto size = candidate->getDimension(element->getText());
+				const auto bounds = element->getRelativePosition();
+				const irr::u32 padding = candidate == themeCompactDeckFont ? 4 : 12;
+				const irr::u32 heightPadding = candidate == themeCompactDeckFont ? 2 : 6;
+				if(size.Width + padding <= static_cast<irr::u32>(bounds.getWidth()) &&
+					size.Height + heightPadding <= static_cast<irr::u32>(bounds.getHeight()))
+					applied = candidate;
+			}
+			switch(element->getType()) {
+			case irr::gui::EGUIET_BUTTON:
+				static_cast<irr::gui::IGUIButton*>(element)->setOverrideFont(applied);
+				break;
+			case irr::gui::EGUIET_STATIC_TEXT:
+				static_cast<irr::gui::IGUIStaticText*>(element)->setOverrideFont(applied);
+				break;
+			case irr::gui::EGUIET_EDIT_BOX:
+				static_cast<irr::gui::IGUIEditBox*>(element)->setOverrideFont(applied);
+				break;
+			default:
+				break;
+			}
+			self(self, element);
+		}
+	};
+	visit(visit, env->getRootGUIElement());
+	if(lstHostList)
+		lstHostList->setOverrideFont(font);
+	if(lstReplayList)
+		lstReplayList->setOverrideFont(font);
+}
 void Game::SaveConfig() {
 	FileSystem::RemoveFile("load-once.conf");
 	FILE* fp = myfopen("system.conf", "w");
@@ -1602,6 +2349,7 @@ void Game::SaveConfig() {
 	std::fprintf(fp, "textfont = %s %d\n", gameConf.textfont, gameConf.textfontsize);
 	std::fprintf(fp, "numfont = %s\n", gameConf.numfont);
 	std::fprintf(fp, "serverport = %d\n", gameConf.serverport);
+	std::fprintf(fp, "mcp_port = %d\n", gameConf.mcp_port);
 	std::fprintf(fp, "local_host_only = %d\n", gameConf.local_host_only ? 1 : 0);
 	BufferIO::EncodeUTF8(gameConf.lasthost, linebuf);
 	std::fprintf(fp, "lasthost = %s\n", linebuf);
@@ -1624,6 +2372,9 @@ void Game::SaveConfig() {
 	std::fprintf(fp, "#control_mode = 0: Key A/S/D/R Chain Buttons. control_mode = 1: MouseLeft/MouseRight/NULL/F9 Without Chain Buttons\n");
 	std::fprintf(fp, "control_mode = %d\n", gameConf.control_mode);
 	std::fprintf(fp, "draw_field_spell = %d\n", gameConf.draw_field_spell);
+	std::fprintf(fp, "preserve_field_aspect = %d\n", gameConf.preserve_field_aspect ? 1 : 0);
+	std::fprintf(fp, "modern_field_view = %d\n", gameConf.modern_field_view ? 1 : 0);
+	std::fprintf(fp, "theme = %s\n", gameConf.theme_id.c_str());
 	std::fprintf(fp, "separate_clear_button = %d\n", gameConf.separate_clear_button);
 	std::fprintf(fp, "#auto_search_limit >= 0: Start search automatically when the user enters N chars\n");
 	std::fprintf(fp, "auto_search_limit = %d\n", gameConf.auto_search_limit);
@@ -1993,6 +2744,8 @@ void Game::SwapYesNoButtons(bool no_first) {
 	}
 }
 void Game::OnResize() {
+	// The saved pile target no longer matches the new projection until the next mouse event.
+	dField.hovered_location = 0;
 #ifdef _WIN32
 	WINDOWPLACEMENT plc;
 	plc.length = sizeof(WINDOWPLACEMENT);
@@ -2002,6 +2755,13 @@ void Game::OnResize() {
 	if(!gameConf.window_maximized) {
 		gameConf.window_width = window_size.Width;
 		gameConf.window_height = window_size.Height;
+	}
+	if(camera) {
+		const auto fieldProjection = GetFieldProjectionForView(window_size.Width, window_size.Height,
+			gameConf.modern_field_view || gameConf.preserve_field_aspect, gameConf.modern_field_view);
+		irr::core::matrix4 projection;
+		BuildProjectionMatrix(projection, fieldProjection.left, fieldProjection.right, fieldProjection.bottom, fieldProjection.top, 1.0f, 100.0f);
+		camera->setProjectionMatrix(projection);
 	}
 
 	irr::gui::CGUITTFont* old_numFont = numFont;
@@ -2034,7 +2794,7 @@ void Game::OnResize() {
 			button->setImage(imageManager.tButtonFacedown[imgInfo.first]);
 	}
 
-	wMainMenu->setRelativePosition(ResizeWin(370, 200, 650, 415));
+	ApplyThemeMenuLayout();
 	wDeckEdit->setRelativePosition(Resize(309, 5, 605, 130));
 	cbDBDecks->setRelativePosition(Resize(80, 35, 220, 60));
 	btnClearDeck->setRelativePosition(Resize(115, 99, 165, 120));
@@ -2087,6 +2847,7 @@ void Game::OnResize() {
 	stStar->setRelativePosition(Resize(10, 62 + 100 / 6, 70, 82 + 100 / 6));
 	stSearch->setRelativePosition(Resize(205, 62 + 100 / 6, 280, 82 + 100 / 6));
 	stScale->setRelativePosition(Resize(105, 62 + 100 / 6, 165, 82 + 100 / 6));
+	ApplyThemeDeckCompactLayout();
 	btnSideOK->setRelativePosition(Resize(400, 40, 710, 80));
 	btnSideShuffle->setRelativePosition(Resize(310, 100, 370, 130));
 	btnSideSort->setRelativePosition(Resize(375, 100, 435, 130));
@@ -2097,6 +2858,7 @@ void Game::OnResize() {
 	wCreateHost->setRelativePosition(ResizeWin(320, 100, 700, 520));
 	wHostPrepare->setRelativePosition(ResizeWin(270, 120, 750, 440));
 	wReplay->setRelativePosition(ResizeWin(220, 100, 800, 520));
+	ApplyThemeBrowserLayout();
 	wSinglePlay->setRelativePosition(ResizeWin(220, 100, 800, 520));
 
 	wHand->setRelativePosition(ResizeWin(500, 450, 825, 605));
@@ -2152,6 +2914,7 @@ void Game::OnResize() {
 	wCardImg->setRelativePosition(ResizeCardImgWin(1, 1, 20, 18));
 	imgCard->setRelativePosition(ResizeCardImgWin(10, 9, 0, 0));
 	wInfos->setRelativePosition(Resize(1, 275, 301, 639));
+	ApplyThemeAppearanceLayout();
 	stName->setRelativePosition(irr::core::recti(10, 10, 300 * xScale - 13, 10 + 22));
 	lstLog->setRelativePosition(Resize(10, 10, 290, 290));
 	if(showingcode)
@@ -2192,6 +2955,7 @@ void Game::OnResize() {
 
 	irr::s32 barWidth = (xScale > 1) ? gameConf.textfontsize * xScale : gameConf.textfontsize;
 	env->getSkin()->setSize(irr::gui::EGDS_SCROLLBAR_SIZE, barWidth);
+	ApplyThemeTypography();
 }
 void Game::ResizeChatInputWindow() {
 	irr::s32 x = wInfos->getRelativePosition().LowerRightCorner.X + 6;

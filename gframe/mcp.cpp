@@ -95,6 +95,7 @@
 #include <condition_variable>
 #include <chrono>
 #include <algorithm>
+#include <memory>
 #include <cctype>
 #include <cstdint>
 #include <IEventReceiver.h>
@@ -119,7 +120,7 @@ void UpdateDeck();                              // menu_handler.cpp
 // ---------------------------------------------------------------------------
 
 struct MCPJob {
-    int id = 0;
+    json id = nullptr;
     std::string method;
     json params;
     bool done = false;
@@ -127,6 +128,8 @@ struct MCPJob {
     json result;   // "result" payload on success
     std::string error_msg;   // JSON-RPC error message on failure
     bool blocking = false;   // ygo_connect/ygo_choose/ygo_surrender: held until the next decision point
+    std::atomic<bool> cancelled{ false };
+    bool http = false;
     std::mutex mtx;
     std::condition_variable cv;
 };
@@ -138,7 +141,15 @@ static std::thread g_thread;
 static HANDLE g_reader_handle = nullptr;
 #endif
 static std::mutex g_qmtx;
-static std::deque<MCPJob*> g_queue;
+static std::deque<std::shared_ptr<MCPJob>> g_queue;
+static constexpr size_t kMaxPendingJobs = 8;
+static std::vector<json> g_http_cancel_ids;
+static std::atomic<bool> g_http_cancel_all{false};
+#ifdef YGOPROMCP_HTTP_PROBE
+// Diagnostic-only GUI queue fixture. It is not advertised or compiled into
+// production: tests can hold the active slot without touching game state.
+static int g_probe_mutations = 0;
+#endif
 
 static std::string MCP_Execute(MCPJob* job);
 static void dbg(const char* s) { if (std::getenv("YGOCLI_MCP_DEBUG")) { fprintf(stderr, "[mcp] %s\n", s); fflush(stderr); } }
@@ -150,10 +161,10 @@ static bool MCP_IsBlockingTool(const std::string& name) {
         || name == "ygo_surrender" || name == "ygo_disconnect";
 }
 
-static MCPJob* MCP_PopJob() {
+static std::shared_ptr<MCPJob> MCP_PopJob() {
     std::lock_guard<std::mutex> lk(g_qmtx);
-    if (g_queue.empty()) return nullptr;
-    MCPJob* job = g_queue.front();
+    if (g_queue.empty()) return {};
+    auto job = g_queue.front();
     g_queue.pop_front();
     return job;
 }
@@ -161,7 +172,7 @@ static MCPJob* MCP_PopJob() {
 static bool MCP_DisconnectQueued() {
     std::lock_guard<std::mutex> lk(g_qmtx);
     if (g_queue.empty()) return false;
-    const MCPJob* job = g_queue.front();
+    const MCPJob* job = g_queue.front().get();
     return job->method == "tools/call" && job->params.is_object()
         && job->params.value("name", "") == "ygo_disconnect";
 }
@@ -174,10 +185,13 @@ static void MCP_HandleLine(const std::string& line) {
     } catch (...) {
         return;
     }
-    if (!req.is_object() || !req.contains("id")) { dbg("reader: bad req"); return; }
+    if (!req.is_object() || !req.contains("id") ||
+        !req.contains("method") || !req["method"].is_string()) {
+        dbg("reader: bad req"); return;
+    }
     dbg("reader: got request");
-    auto* job = new MCPJob;
-    job->id = req.value("id", 0);
+    auto job = std::make_shared<MCPJob>();
+    job->id = req["id"];
     job->method = req.value("method", "");
     if (req.contains("params")) job->params = req["params"];
     // blocking tools (coroutine): the response waits for a decision point
@@ -188,7 +202,12 @@ static void MCP_HandleLine(const std::string& line) {
     }
     {
         std::lock_guard<std::mutex> lk(g_qmtx);
-        g_queue.push_back(job);
+        if (g_queue.size() >= kMaxPendingJobs) {
+            job->error_msg = "MCP request queue is full";
+            job->done = true;
+        } else {
+            g_queue.push_back(job);
+        }
     }
     dbg("reader: queued request");
     {
@@ -199,6 +218,7 @@ static void MCP_HandleLine(const std::string& line) {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
         while (!job->done && g_running && (job->blocking || std::chrono::steady_clock::now() < deadline))
             job->cv.wait_for(lk, std::chrono::milliseconds(25));
+        if (!job->done) job->cancelled = true;
     }
     json resp;
     resp["jsonrpc"] = "2.0";
@@ -215,7 +235,6 @@ static void MCP_HandleLine(const std::string& line) {
         auto queued = std::find(g_queue.begin(), g_queue.end(), job);
         if (queued != g_queue.end()) g_queue.erase(queued);
     }
-    delete job;
 }
 
 static void MCP_ReaderThread() {
@@ -232,8 +251,109 @@ static void MCP_ReaderThread() {
         const int count = g_stdio.Read(buffer, sizeof(buffer));
         if (count < 0) break;
         if (count > 0) pending.append(buffer, static_cast<size_t>(count));
+        if (pending.size() > 1048576) pending.clear();
     }
-    g_running = false;
+    // EOF only closes stdio. A user-enabled HTTP listener may still be active.
+}
+
+std::string MCP_InvokeHttp(const std::string& request,
+                           const std::function<bool()>& connection_alive) {
+    json req;
+    try { req = json::parse(request); }
+    catch (...) {
+        return json{{"jsonrpc", "2.0"}, {"id", nullptr},
+                    {"error", {{"code", -32700}, {"message", "Parse error"}}}}.dump();
+    }
+    const auto error = [](const json& id, int code, const char* message) {
+        return json{{"jsonrpc", "2.0"}, {"id", id},
+                    {"error", {{"code", code}, {"message", message}}}}.dump();
+    };
+    if (!req.is_object() || !req.contains("jsonrpc") || !req["jsonrpc"].is_string() ||
+        req["jsonrpc"] != "2.0" ||
+        !req.contains("id") || (!req["id"].is_number() && !req["id"].is_string()) ||
+        !req.contains("method") || !req["method"].is_string())
+        return error(req.is_object() && req.contains("id") ? req["id"] : json(nullptr),
+                     -32600, "Invalid Request");
+    auto job = std::make_shared<MCPJob>();
+    job->id = req["id"];
+    job->method = req["method"].get<std::string>();
+    job->params = req.value("params", json::object());
+    job->http = true;
+    if (job->method == "tools/call" && job->params.is_object() &&
+        job->params.contains("name") && job->params["name"].is_string())
+        job->blocking = MCP_IsBlockingTool(job->params["name"].get<std::string>());
+#ifdef YGOPROMCP_HTTP_PROBE
+    if (job->method == "probe/hold") job->blocking = true;
+#endif
+    {
+        std::lock_guard<std::mutex> lk(g_qmtx);
+        if (!g_running) return error(job->id, -32000, "Game bridge is stopped");
+        if (g_queue.size() >= kMaxPendingJobs)
+            return error(job->id, -32000, "MCP request queue is full");
+        g_queue.push_back(job);
+    }
+    bool disconnected = false;
+    {
+        std::unique_lock<std::mutex> lk(job->mtx);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+        while (!job->done && g_running &&
+               (job->blocking || std::chrono::steady_clock::now() < deadline)) {
+            if (!connection_alive()) { disconnected = true; break; }
+            job->cv.wait_for(lk, std::chrono::milliseconds(25));
+        }
+        if (!job->done && !disconnected) job->cancelled = true;
+    }
+    // 2025-11-25 Streamable HTTP: a dropped connection is not a cancellation.
+    // The shared job remains owned by the bounded GUI queue or active slot.
+    if (disconnected) return "";
+    if (job->cancelled) {
+        std::lock_guard<std::mutex> lk(g_qmtx);
+        auto queued = std::find(g_queue.begin(), g_queue.end(), job);
+        if (queued != g_queue.end()) g_queue.erase(queued);
+        return error(job->id, -32000, "Request cancelled or timed out");
+    }
+    if (job->ok)
+        return json{{"jsonrpc", "2.0"}, {"id", job->id}, {"result", job->result}}.dump();
+    return error(job->id, -32603, job->error_msg.empty() ?
+                 "Internal error" : job->error_msg.c_str());
+}
+
+void MCP_CancelHttpRequest(const std::string& request_id_json) {
+    json id;
+    try { id = json::parse(request_id_json); } catch (...) { return; }
+    if (!id.is_string() && !id.is_number()) return;
+    std::lock_guard<std::mutex> lk(g_qmtx);
+    for(auto it = g_queue.begin(); it != g_queue.end(); ++it) {
+        auto job = *it;
+        if(job->http && job->id == id) {
+            job->cancelled = true;
+            {
+                std::lock_guard<std::mutex> job_lk(job->mtx);
+                job->error_msg = "Request cancelled by client";
+                job->done = true;
+            }
+            job->cv.notify_one();
+            g_queue.erase(it);
+            return;
+        }
+    }
+    if(g_http_cancel_ids.size() < kMaxPendingJobs) g_http_cancel_ids.push_back(id);
+}
+void MCP_CancelAllHttpRequests() {
+    g_http_cancel_all = true;
+    std::lock_guard<std::mutex> lk(g_qmtx);
+    for(auto it = g_queue.begin(); it != g_queue.end();) {
+        auto job = *it;
+        if(!job->http) { ++it; continue; }
+        job->cancelled = true;
+        {
+            std::lock_guard<std::mutex> job_lk(job->mtx);
+            job->error_msg = "Local MCP listener was disabled";
+            job->done = true;
+        }
+        job->cv.notify_one();
+        it = g_queue.erase(it);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -269,7 +389,7 @@ static std::chrono::steady_clock::time_point g_connect_t0;
 
 // A held call waiting for the next decision or a completed disconnect
 // (GUI thread only).
-static MCPJob* g_active_job = nullptr;
+static std::shared_ptr<MCPJob> g_active_job;
 static bool g_disconnect_pending = false;
 static std::chrono::steady_clock::time_point g_disconnect_t0;
 
@@ -2668,11 +2788,23 @@ static json ToolSchema(const char* name, const char* desc, json props) {
 // text ("" when the response block carries it); for initialize/tools/list
 // sets job->result and returns "".
 static std::string MCP_Execute(MCPJob* job) {
+#ifdef YGOPROMCP_HTTP_PROBE
+    if (job->method == "probe/hold") {
+        job->ok = true;
+        return "";
+    }
+    if (job->method == "probe/mutate" || job->method == "probe/count") {
+        if (job->method == "probe/mutate") ++g_probe_mutations;
+        job->ok = true;
+        job->result = {{"mutations", g_probe_mutations}};
+        return "";
+    }
+#endif
     if (job->method == "initialize") {
         job->ok = true;
         // serverInfo is REQUIRED by the MCP SDK's InitializeResultSchema; the
         // tools capability must be advertised or listTools() returns empty.
-        job->result = {{"protocolVersion", "2024-11-05"},
+        job->result = {{"protocolVersion", job->http ? "2025-11-25" : "2024-11-05"},
                        {"capabilities", {{"tools", json::object()}}},
                        {"serverInfo", {{"name", "ygopro-mcp"}, {"version", "1.0.0"}}}};
         return "";
@@ -2765,8 +2897,10 @@ void MCP_Init() {
     g_thread = std::thread(MCP_ReaderThread);
 #endif
 }
+bool MCP_BridgeIsReady() { return g_running; }
 
 void MCP_Shutdown() {
+    MCP_HTTP_Stop();
     g_running = false;
     if (g_thread.joinable()) {
 #ifdef _WIN32
@@ -2798,13 +2932,42 @@ void MCP_Shutdown() {
 #endif
     }
     g_queue.clear();
-    g_active_job = nullptr;
+    g_active_job.reset();
     g_disconnect_pending = false;
     g_stdio.Stop();
 }
 
 void MCP_Poll() {
     if (!g_running) return;
+    {
+        std::lock_guard<std::mutex> lk(g_qmtx);
+        if(g_active_job && g_active_job->http &&
+           (g_http_cancel_all ||
+            std::find(g_http_cancel_ids.begin(), g_http_cancel_ids.end(), g_active_job->id)
+                != g_http_cancel_ids.end()))
+            g_active_job->cancelled = true;
+        g_http_cancel_ids.clear();
+        g_http_cancel_all = false;
+    }
+    if (g_active_job && g_active_job->cancelled) {
+        // The response owner has gone away. Do not let the abandoned
+        // coroutine hold the GUI request gate or continue auto-joining.
+        {
+            std::lock_guard<std::mutex> lk(g_active_job->mtx);
+            g_active_job->ok = false;
+            g_active_job->error_msg = "Request cancelled by client";
+            g_active_job->done = true;
+        }
+        g_active_job->cv.notify_one();
+        g_active_job.reset();
+        g_connect_phase = ConnectPhase::NONE;
+        g_connect_readied = false;
+        g_disconnect_pending = false;
+    }
+#ifdef YGOPROMCP_HTTP_PROBE
+    if (g_active_job && g_active_job->method == "probe/hold")
+        return;
+#endif
     dbg("poll called");
     // The GUI event receiver drops button events while a fade animation is
     // running (ClientField::OnEvent: if(fadingList.size()) break). Defer the
@@ -2828,17 +2991,17 @@ void MCP_Poll() {
                 if (std::chrono::steady_clock::now() - g_disconnect_t0
                     > std::chrono::seconds(15)) {
                     g_disconnect_pending = false;
-                    MCP_CompleteJob(g_active_job,
+                    MCP_CompleteJob(g_active_job.get(),
                                     "Error: disconnect timed out\n" + MCP_BlockText());
-                    g_active_job = nullptr;
+                    g_active_job.reset();
                 }
                 return;
             }
             g_disconnect_pending = false;
             MCP_FinishDisconnect();
             MCP_Log("Left the room.");
-            MCP_CompleteJob(g_active_job, MCP_BlockText());
-            g_active_job = nullptr;
+            MCP_CompleteJob(g_active_job.get(), MCP_BlockText());
+            g_active_job.reset();
             return;
         }
         // A different player can close the room while this client is waiting
@@ -2853,8 +3016,8 @@ void MCP_Poll() {
             g_connect_phase = ConnectPhase::NONE;
             g_connect_readied = false;
             MCP_Log("Room connection closed.");
-            MCP_CompleteJob(g_active_job, MCP_BlockText());
-            g_active_job = nullptr;
+            MCP_CompleteJob(g_active_job.get(), MCP_BlockText());
+            g_active_job.reset();
             return;
         }
         bool back_to_menu = mainGame && mainGame->wMainMenu
@@ -2871,15 +3034,16 @@ void MCP_Poll() {
                         mainGame ? (int)mainGame->dInfo.curMsg : -1,
                         (unsigned long long)g_stoc_seq.load(std::memory_order_relaxed),
                         (unsigned long long)g_last_acted_seq.load(std::memory_order_relaxed));
-            MCP_CompleteJob(g_active_job, MCP_BlockText());
-            g_active_job = nullptr;
+            MCP_CompleteJob(g_active_job.get(), MCP_BlockText());
+            g_active_job.reset();
         }
         return;   // one outstanding request at a time (coroutine model)
     }
-    while (auto* job = MCP_PopJob()) {
+    while (auto job = MCP_PopJob()) {
+        if (job->cancelled) continue;
         std::string text;
         try {
-            text = MCP_Execute(job);
+            text = MCP_Execute(job.get());
         } catch (const std::exception& e) {
             // A malformed argument (e.g. a type mismatch in args) must never
             // crash the GUI thread: surface it as a JSON-RPC error instead.
@@ -2887,7 +3051,7 @@ void MCP_Poll() {
             job->error_msg = std::string("internal error: ") + e.what();
         }
         if (!job->ok) {          // JSON-RPC error (unknown tool/method/bad args)
-            MCP_FinishJob(job);
+            MCP_FinishJob(job.get());
             break;
         }
         if (!job->blocking) {
@@ -2895,14 +3059,14 @@ void MCP_Poll() {
             // immediate response = the same text block as every tool.
             if (job->method == "tools/call") {
                 std::string name = job->params.value("name", "");
-                MCP_CompleteJob(job, name.rfind("ygo_deck_", 0) == 0 ? text : MCP_BlockText());
+                MCP_CompleteJob(job.get(), name.rfind("ygo_deck_", 0) == 0 ? text : MCP_BlockText());
             }
             else
-                MCP_FinishJob(job);
+                MCP_FinishJob(job.get());
             continue;
         }
         if (text.rfind("Error:", 0) == 0) {   // invalid input: respond now
-            MCP_CompleteJob(job, text + "\n" + MCP_BlockText());
+            MCP_CompleteJob(job.get(), text + "\n" + MCP_BlockText());
             break;
         }
         // ALWAYS hold after a successful blocking action. Completing in the

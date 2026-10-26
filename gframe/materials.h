@@ -10,6 +10,7 @@ class Materials {
 public:
 	Materials();
 	void GenArrow(float y);
+	void UseModernZones();
 	
 	irr::video::S3DVertex vCardFront[4];
 	irr::video::S3DVertex vCardOutline[4];
@@ -40,6 +41,8 @@ public:
 	irr::video::SMaterial mTexture;
 	irr::video::SMaterial mBackLine;
 	irr::video::SMaterial mOutLine;
+	irr::video::SMaterial mModernBoard;
+	irr::video::SMaterial mModernZone;
 	irr::video::SMaterial mSelField;
 	irr::video::SMaterial mTRTexture;
 	irr::video::SMaterial mATK;

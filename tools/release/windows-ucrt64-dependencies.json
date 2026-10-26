@@ -1,0 +1,21 @@
+[
+  { "dll": "libbrotlicommon.dll", "license": "brotli" },
+  { "dll": "libbrotlidec.dll", "license": "brotli" },
+  { "dll": "libbz2-1.dll", "license": "bzip2" },
+  { "dll": "libevent-7.dll", "license": "libevent" },
+  { "dll": "libfreetype-6.dll", "license": "freetype" },
+  { "dll": "libgcc_s_seh-1.dll", "license": "libgcc" },
+  { "dll": "libglib-2.0-0.dll", "license": "glib2" },
+  { "dll": "libgraphite2.dll", "license": "graphite2" },
+  { "dll": "libharfbuzz-0.dll", "license": "harfbuzz" },
+  { "dll": "libiconv-2.dll", "license": "libiconv" },
+  { "dll": "libintl-8.dll", "license": "gettext-runtime" },
+  { "dll": "libjpeg-8.dll", "license": "libjpeg-turbo" },
+  { "dll": "liblzma-5.dll", "license": "xz" },
+  { "dll": "libpcre2-8-0.dll", "license": "pcre2" },
+  { "dll": "libpng16-16.dll", "license": "libpng" },
+  { "dll": "libsqlite3-0.dll", "license": "sqlite3" },
+  { "dll": "libstdc++-6.dll", "license": "libstdc++" },
+  { "dll": "libwinpthread-1.dll", "license": "libwinpthread" },
+  { "dll": "zlib1.dll", "license": "zlib" }
+]

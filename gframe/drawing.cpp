@@ -2,6 +2,7 @@
 #include <cmath>
 #include <vector>
 #include "game.h"
+#include "field_projection.h"
 #include "CGUITTFont.h"
 #include "client_card.h"
 #include "materials.h"
@@ -298,6 +299,18 @@ void Game::DrawBackGround() {
 	driver->setTransform(irr::video::ETS_WORLD, irr::core::IdentityMatrix);
 	bool drawField = false;
 	int rule = (dInfo.duel_rule >= 4) ? 1 : 0;
+	if(gameConf.modern_field_view) {
+		irr::video::S3DVertex board[4];
+		auto boardColor = themeManager.HasVisualStyle() ? themeManager.GetDeckPanelColor() :
+			irr::video::SColor(255, 20, 32, 45);
+		boardColor.setAlpha(255);
+		for(int i = 0; i < 4; ++i) {
+			board[i] = matManager.vField[i];
+			board[i].Color = boardColor;
+		}
+		driver->setMaterial(matManager.mModernBoard);
+		driver->drawVertexPrimitiveList(board, 4, matManager.iRectangle, 2);
+	}
 	if(gameConf.draw_field_spell) {
 		int fieldcode1 = -1;
 		int fieldcode2 = -1;
@@ -331,9 +344,45 @@ void Game::DrawBackGround() {
 			}
 		}
 	}
-	matManager.mTexture.setTexture(0, drawField ? imageManager.tFieldTransparent[rule] : imageManager.tField[rule]);
-	driver->setMaterial(matManager.mTexture);
-	driver->drawVertexPrimitiveList(matManager.vField, 4, matManager.iRectangle, 2);
+	if(gameConf.modern_field_view) {
+		// The checked-in board textures paint Classic zone borders. Render the
+		// modern zones from the actual quads so outlines and picks stay aligned.
+		driver->setMaterial(matManager.mModernZone);
+		const auto zoneColor = themeManager.HasVisualStyle() ? themeManager.GetDeckFrameColor() :
+			irr::video::SColor(0xffd8dee9);
+		const auto drawZone = [&](const irr::video::S3DVertex* vertices) {
+			const int corners[] = { 0, 1, 3, 2 };
+			for(int edge = 0; edge < 4; ++edge) {
+				auto start = vertices[corners[edge]].Pos;
+				auto end = vertices[corners[(edge + 1) % 4]].Pos;
+				start.Z += 0.012f;
+				end.Z += 0.012f;
+				driver->draw3DLine(start, end, zoneColor);
+			}
+		};
+		for(int player = 0; player < 2; ++player) {
+			drawZone(matManager.vFieldDeck[player]);
+			drawZone(matManager.vFieldExtra[player]);
+			drawZone(matManager.vFieldGrave[player][rule]);
+			drawZone(matManager.vFieldRemove[player][rule]);
+			for(int sequence = 0; sequence < 5; ++sequence) {
+				drawZone(matManager.vFieldMzone[player][sequence]);
+				drawZone(matManager.vFieldSzone[player][sequence][rule]);
+			}
+			drawZone(matManager.vFieldSzone[player][5][rule]);
+			if(rule) {
+				drawZone(matManager.vFieldMzone[player][5]);
+				drawZone(matManager.vFieldMzone[player][6]);
+			} else {
+				drawZone(matManager.vFieldSzone[player][6][rule]);
+				drawZone(matManager.vFieldSzone[player][7][rule]);
+			}
+		}
+	} else {
+		matManager.mTexture.setTexture(0, drawField ? imageManager.tFieldTransparent[rule] : imageManager.tField[rule]);
+		driver->setMaterial(matManager.mTexture);
+		driver->drawVertexPrimitiveList(matManager.vField, 4, matManager.iRectangle, 2);
+	}
 	//select field
 	driver->setMaterial(matManager.mOutLine);
 	if(dInfo.curMsg == MSG_SELECT_PLACE || dInfo.curMsg == MSG_SELECT_DISFIELD || dInfo.curMsg == MSG_HINT) {
@@ -563,8 +612,9 @@ void Game::DrawCard(ClientCard* pcard) {
 	}
 	matManager.mCard.AmbientColor = 0xffffffff;
 	matManager.mCard.DiffuseColor = (pcard->curAlpha << 24) | 0xffffff;
-	driver->setTransform(irr::video::ETS_WORLD, pcard->mTransform);
-	auto m22 = pcard->mTransform(2, 2);
+	const auto renderTransform = GetCardRenderTransform(pcard);
+	driver->setTransform(irr::video::ETS_WORLD, renderTransform);
+	auto m22 = renderTransform(2, 2);
 	if(m22 > -0.99 || pcard->is_moving) {
 		auto code = pcard->code;
 		if (code == 0 && pcard->is_moving)
@@ -580,6 +630,24 @@ void Game::DrawCard(ClientCard* pcard) {
 	}
 	if(pcard->is_moving)
 		return;
+	if(gameConf.modern_field_view && pcard->location == LOCATION_HAND
+		&& pcard->controler == 0 && pcard->is_hovered) {
+		// A pale focus edge and translucent outer halo leave the artwork
+		// unchanged. The existing inner yellow line still denotes selection.
+		irr::video::S3DVertex hoverOutline[4];
+		for(int i = 0; i < 4; ++i) {
+			hoverOutline[i] = matManager.vCardOutline[i];
+			hoverOutline[i].Pos.X *= 1.14f;
+			hoverOutline[i].Pos.Y *= 1.12f;
+		}
+		DrawSelectionLine(hoverOutline, false, 0x4864d8ff);
+		for(int i = 0; i < 4; ++i) {
+			hoverOutline[i] = matManager.vCardOutline[i];
+			hoverOutline[i].Pos.X *= 1.08f;
+			hoverOutline[i].Pos.Y *= 1.06f;
+		}
+		DrawSelectionLine(hoverOutline, false, 0xffbfefff);
+	}
 	if(pcard->is_selectable && (pcard->location & 0xe)) {
 		if((pcard->location == LOCATION_HAND && pcard->code) || ((pcard->location & 0xc) && (pcard->position & POS_FACEUP)))
 			DrawSelectionLine(matManager.vCardOutline, !pcard->is_selected, 0xffffff00);
@@ -731,14 +799,26 @@ void Game::DrawMisc() {
 	if(btnLeaveGame->isVisible() && dField.tag_teammate_surrender)
 		DrawSelectionLine(btnLeaveGame, 2, 0xffffff00);
 	//lp bar
+	const bool gildedHud = themeManager.HasVisualStyle();
+	const auto hudFrame = gildedHud ? themeManager.GetDeckFrameColor() : irr::video::SColor(0xffff8080);
 	if((dInfo.turn % 2 && dInfo.isFirst) || (!(dInfo.turn % 2) && !dInfo.isFirst)) {
 		driver->draw2DRectangle(0xa0000000, Resize(327, 8, 630, 51));
-		driver->draw2DRectangleOutline(Resize(327, 8, 630, 51), 0xffff8080);
+		driver->draw2DRectangleOutline(Resize(327, 8, 630, 51), hudFrame);
 	} else {
 		driver->draw2DRectangle(0xa0000000, Resize(689, 8, 992, 51));
-		driver->draw2DRectangleOutline(Resize(689, 8, 992, 51), 0xffff8080);
+		driver->draw2DRectangleOutline(Resize(689, 8, 992, 51), hudFrame);
 	}
-	if(dInfo.start_lp > 0) {
+	if(dInfo.start_lp > 0 && gildedHud) {
+		const int maxLP = dInfo.isTag ? std::max(dInfo.start_lp / 2, 1) : dInfo.start_lp;
+		const int leftWidth = 292 * std::max(0, std::min(dInfo.lp[0], maxLP)) / maxLP;
+		const int rightWidth = 292 * std::max(0, std::min(dInfo.lp[1], maxLP)) / maxLP;
+		driver->draw2DRectangle(themeManager.GetDeckPanelColor(), Resize(333, 12, 625, 28));
+		driver->draw2DRectangle(themeManager.GetDeckPanelColor(), Resize(695, 12, 987, 28));
+		if(leftWidth)
+			driver->draw2DRectangle(themeManager.GetDeckFrameColor(), Resize(333, 12, 333 + leftWidth, 28));
+		if(rightWidth)
+			driver->draw2DRectangle(themeManager.GetFocusColor(), Resize(987 - rightWidth, 12, 987, 28));
+	} else if(dInfo.start_lp > 0) {
 		constexpr float maxBarWidth = 292.0f;
 		auto maxLP = dInfo.isTag ? std::max(dInfo.start_lp / 2, 1) : dInfo.start_lp;
 		if(dInfo.lp[0] > maxLP) {
@@ -770,9 +850,20 @@ void Game::DrawMisc() {
 			driver->draw2DImage(imageManager.tLPBar, Resize(987 - barWidth, 12, 987, 28), irr::core::recti(0, 0, 16, 16), 0, 0, true);
 		}
 	}
-	auto tLPFrameRect = irr::core::recti(0, 0, imageManager.tLPFrame->getOriginalSize().Width, imageManager.tLPFrame->getOriginalSize().Height);
-	driver->draw2DImage(imageManager.tLPFrame, Resize(329, 10, 629, 30), tLPFrameRect, 0, 0, true);
-	driver->draw2DImage(imageManager.tLPFrame, Resize(691, 10, 991, 30), tLPFrameRect, 0, 0, true);
+	if(gildedHud) {
+		driver->draw2DRectangleOutline(Resize(329, 10, 629, 30), hudFrame);
+		driver->draw2DRectangleOutline(Resize(691, 10, 991, 30), hudFrame);
+		// Keep the values on an opaque surface as the colored fill shrinks.
+		// This leaves the life-point calculation and bar bounds unchanged.
+		driver->draw2DRectangle(irr::video::SColor(0xff06131b), Resize(425, 10, 535, 30));
+		driver->draw2DRectangleOutline(Resize(425, 10, 535, 30), hudFrame);
+		driver->draw2DRectangle(irr::video::SColor(0xff06131b), Resize(786, 10, 896, 30));
+		driver->draw2DRectangleOutline(Resize(786, 10, 896, 30), themeManager.GetFocusColor());
+	} else {
+		auto tLPFrameRect = irr::core::recti(0, 0, imageManager.tLPFrame->getOriginalSize().Width, imageManager.tLPFrame->getOriginalSize().Height);
+		driver->draw2DImage(imageManager.tLPFrame, Resize(329, 10, 629, 30), tLPFrameRect, 0, 0, true);
+		driver->draw2DImage(imageManager.tLPFrame, Resize(691, 10, 991, 30), tLPFrameRect, 0, 0, true);
+	}
 	if(lpframe) {
 		dInfo.lp[lpplayer] -= lpd;
 		myswprintf(dInfo.strLP[lpplayer], L"%d", dInfo.lp[lpplayer]);
@@ -792,8 +883,12 @@ void Game::DrawMisc() {
 		driver->draw2DRectangle(Resize(795 - dInfo.time_left[1] * 100 / dInfo.time_limit, 34, 795, 44), 0xa0e0e0e0, 0xa0e0e0e0, 0xa0c0c0c0, 0xa0c0c0c0);
 		driver->draw2DRectangleOutline(Resize(695, 34, 795, 44), 0xffffffff);
 	}
-	DrawShadowText(numFont, dInfo.strLP[0], Resize(330, 12, 631, 30), Resize(0, 1, 2, 0), 0xffffff00, 0xff000000, true, false, 0);
-	DrawShadowText(numFont, dInfo.strLP[1], Resize(691, 12, 992, 30), Resize(0, 1, 2, 0), 0xffffff00, 0xff000000, true, false, 0);
+	DrawShadowText(numFont, dInfo.strLP[0], Resize(330, 12, 631, 30), Resize(0, 1, 2, 0),
+		gildedHud ? irr::video::SColor(0xffffffff) : irr::video::SColor(0xffffff00),
+		irr::video::SColor(0xff000000), true, false, 0);
+	DrawShadowText(numFont, dInfo.strLP[1], Resize(691, 12, 992, 30), Resize(0, 1, 2, 0),
+		gildedHud ? irr::video::SColor(0xffffffff) : irr::video::SColor(0xffffff00),
+		irr::video::SColor(0xff000000), true, false, 0);
 
 	if(!gameConf.hide_player_name) {
 		irr::core::recti p1size = Resize(334, 31, 624, 50);
@@ -873,50 +968,54 @@ void Game::DrawMisc() {
 			DrawShadowText(adFont, pcard->rscstring, Resize(499, 223, 531, 243), Resize(1, 1, 1, 1), 0xffffffff, 0xff000000, true, false, 0);
 		}
 	}
-	if(dField.extra[0].size()) {
-		int offset = (dField.extra[0].size() >= 10) ? 0 : numFont->getDimension(dataManager.GetNumString(1)).Width;
-		DrawShadowText(numFont, dataManager.GetNumString(dField.extra[0].size()), Resize(320, 563, 373, 553, offset, 0, 0, 0), Resize(0, 1, 2, 1), 0xffffff00, 0xff000000, true, false, 0);
-		DrawShadowText(numFont, dataManager.GetNumString(dField.extra_p_count[0], true), Resize(340, 563, 393, 553), Resize(0, 1, 2, 1), 0xffffff00, 0xff000000, true, false, 0);
-	}
-	if(dField.deck[0].size()) {
-		DrawShadowText(numFont, dataManager.GetNumString(dField.deck[0].size()), Resize(908, 563, 1023, 553), Resize(0, 1, 2, 1), 0xffffff00, 0xff000000, true, false, 0);
-	}
-	if (rule == 0) {
-		if (dField.grave[0].size()) {
-			DrawShadowText(numFont, dataManager.GetNumString(dField.grave[0].size()), Resize(837, 376, 986, 381), Resize(0, 1, 2, 1), 0xffffff00, 0xff000000, true, false, 0);
+	// The pile label follows the same hover target as card inspection and clicks.
+	// The theme adapter supplies its text color without changing hover behavior.
+	if(dField.hovered_controler < 2) {
+		const int player = dField.hovered_controler;
+		const irr::video::S3DVertex* zone = nullptr;
+		size_t count = 0;
+		std::wstring label;
+		switch(dField.hovered_location) {
+		case LOCATION_DECK:
+			zone = matManager.vFieldDeck[player];
+			count = dField.deck[player].size();
+			break;
+		case LOCATION_GRAVE:
+			zone = matManager.vFieldGrave[player][rule];
+			count = dField.grave[player].size();
+			break;
+		case LOCATION_REMOVED:
+			zone = matManager.vFieldRemove[player][rule];
+			count = dField.remove[player].size();
+			break;
+		case LOCATION_EXTRA:
+			zone = matManager.vFieldExtra[player];
+			count = dField.extra[player].size();
+			break;
+		default:
+			break;
 		}
-		if (dField.remove[0].size()) {
-			DrawShadowText(numFont, dataManager.GetNumString(dField.remove[0].size()), Resize(1015, 376, 959, 381), Resize(0, 1, 2, 1), 0xffffff00, 0xff000000, true, false, 0);
-		}
-	} else {
-		if (dField.grave[0].size()) {
-			DrawShadowText(numFont, dataManager.GetNumString(dField.grave[0].size()), Resize(870, 457, 1004, 462), Resize(0, 1, 2, 1), 0xffffff00, 0xff000000, true, false, 0);
-		}
-		if (dField.remove[0].size()) {
-			DrawShadowText(numFont, dataManager.GetNumString(dField.remove[0].size()), Resize(837, 376, 986, 381), Resize(0, 1, 2, 1), 0xffffff00, 0xff000000, true, false, 0);
-		}
-	}
-	if(dField.extra[1].size()) {
-		int offset = (dField.extra[1].size() >= 10) ? 0 : numFont->getDimension(dataManager.GetNumString(1)).Width;
-		DrawShadowText(numFont, dataManager.GetNumString(dField.extra[1].size()), Resize(808, 208, 900, 233, offset, 0, 0, 0), Resize(0, 1, 2, 1), 0xffffff00, 0xff000000, true, false, 0);
-		DrawShadowText(numFont, dataManager.GetNumString(dField.extra_p_count[1], true), Resize(828, 208, 920, 233), Resize(0, 1, 2, 1), 0xffffff00, 0xff000000, true, false, 0);
-	}
-	if(dField.deck[1].size()) {
-		DrawShadowText(numFont, dataManager.GetNumString(dField.deck[1].size()), Resize(465, 208, 483, 233), Resize(0, 1, 2, 1), 0xffffff00, 0xff000000, true, false, 0);
-	}
-	if (rule == 0) {
-		if (dField.grave[1].size()) {
-			DrawShadowText(numFont, dataManager.GetNumString(dField.grave[1].size()), Resize(420, 311, 464, 282), Resize(0, 1, 2, 1), 0xffffff00, 0xff000000, true, false, 0);
-		}
-		if (dField.remove[1].size()) {
-			DrawShadowText(numFont, dataManager.GetNumString(dField.remove[1].size()), Resize(300, 311, 445, 341), Resize(0, 1, 2, 1), 0xffffff00, 0xff000000, true, false, 0);
-		}
-	} else {
-		if (dField.grave[1].size()) {
-			DrawShadowText(numFont, dataManager.GetNumString(dField.grave[1].size()), Resize(455, 250, 464, 300), Resize(0, 1, 2, 1), 0xffffff00, 0xff000000, true, false, 0);
-		}
-		if (dField.remove[1].size()) {
-			DrawShadowText(numFont, dataManager.GetNumString(dField.remove[1].size()), Resize(420, 311, 464, 282), Resize(0, 1, 2, 1), 0xffffff00, 0xff000000, true, false, 0);
+		if(zone && smgr->getActiveCamera()) {
+			label = dataManager.GetNumString(static_cast<int>(count));
+			if(dField.hovered_location == LOCATION_EXTRA && count) {
+				label += L" ";
+				label += dataManager.GetNumString(dField.extra_p_count[player], true);
+			}
+			const irr::core::vector3df pileCenter(
+				(zone[0].Pos.X + zone[1].Pos.X) * 0.5f,
+				(zone[0].Pos.Y + zone[2].Pos.Y) * 0.5f,
+				static_cast<float>(count) * 0.01f + 0.03f);
+			const auto screen = smgr->getSceneCollisionManager()->getScreenCoordinatesFrom3DPosition(
+				pileCenter, smgr->getActiveCamera());
+			const auto textSize = numFont->getDimension(label.c_str());
+			const irr::core::recti textRect(screen.X - static_cast<int>(textSize.Width) / 2 - 4,
+				screen.Y - static_cast<int>(textSize.Height) / 2 - 3,
+				screen.X + static_cast<int>(textSize.Width) / 2 + 4,
+				screen.Y + static_cast<int>(textSize.Height) / 2 + 3);
+			const auto color = themeManager.GetPileCountTextColor();
+			const auto shadow = env->getSkin()->getColor(irr::gui::EGDC_3D_DARK_SHADOW);
+			DrawShadowText(numFont, label, textRect, irr::core::recti(1, 1, 1, 1),
+				color, shadow, true, true);
 		}
 	}
 }
@@ -999,6 +1098,43 @@ void Game::DrawGUI() {
 			fadingList.erase(fthis);
 	}
 	env->drawAll();
+	if(themeManager.HasVisualStyle()) {
+		if(is_building && cbDBDecks && cbDBDecks->getSelected() >= 0)
+			cbDBDecks->setToolTipText(cbDBDecks->getItem(cbDBDecks->getSelected()));
+		const auto frame = themeManager.GetDeckFrameColor();
+		const auto circuit = themeManager.GetCircuitColor();
+		const auto outline = [this, frame](irr::gui::IGUIElement* element) {
+			if(element && element->isVisible())
+				driver->draw2DRectangleOutline(element->getAbsolutePosition(), frame);
+		};
+		outline(wCardImg);
+		outline(wInfos);
+		if(is_building) {
+			outline(wDeckEdit);
+			outline(wFilter);
+			for(auto* panel : {static_cast<irr::gui::IGUIElement*>(wDeckEdit),
+				static_cast<irr::gui::IGUIElement*>(wFilter)}) {
+				if(panel && panel->isVisible()) {
+					const auto area = panel->getAbsolutePosition();
+					driver->draw2DLine({area.UpperLeftCorner.X + 8, area.LowerRightCorner.Y - 8},
+						{area.LowerRightCorner.X - 8, area.LowerRightCorner.Y - 8}, circuit);
+				}
+			}
+		} else if(dInfo.isStarted) {
+			outline(wReplayControl);
+		}
+		if(window_size.Width >= 1024 && window_size.Height >= 640) {
+			for(auto* browser : {wLanWindow, wReplay}) {
+				if(browser && browser->isVisible()) {
+					const auto area = browser->getAbsolutePosition();
+					const int dividerX = area.UpperLeftCorner.X + (browser == wLanWindow ? 640 : 532);
+					driver->draw2DLine({dividerX, area.UpperLeftCorner.Y + 92},
+						{dividerX, area.LowerRightCorner.Y - 35}, circuit);
+				}
+			}
+		}
+	}
+	themeManager.DrawChrome(driver, env);
 }
 void Game::DrawSpec() {
 	irr::s32 midx = 574 + (CARD_IMG_WIDTH * 0.5);
@@ -1145,6 +1281,17 @@ void Game::DrawSpec() {
 				break;
 			case 14:
 				lstr = L"Duel3 Start";
+				break;
+			}
+			if(themeManager.HasVisualStyle() && showcardcode >= 4 && showcardcode <= 10) {
+				if(showcardp < showcarddif + 10) {
+					const auto area = Resize(515, 51, 815, 67);
+					driver->draw2DRectangle(themeManager.GetDeckPanelColor(), area);
+					driver->draw2DRectangleOutline(area, themeManager.GetDeckFrameColor());
+					DrawShadowText(guiFont, lstr, area, Resize(0, 1, 1, 0),
+						themeManager.GetDeckTextColor(), 0xff000000, true, false, 0);
+				}
+				showcardp++;
 				break;
 			}
 			auto pos = lpcFont->getDimension(lstr);
@@ -1326,14 +1473,11 @@ void Game::DrawThumb(const CardDataC* cp, irr::core::vector2di pos, const LFList
 	if(img == nullptr)
 		return; //nullptr->getSize() will cause a crash
 	irr::core::dimension2d<irr::u32> size = img->getOriginalSize();
-	irr::core::recti dragloc = Resize(pos.X, pos.Y, pos.X + CARD_THUMB_WIDTH, pos.Y + CARD_THUMB_HEIGHT);
-	irr::core::recti limitloc = Resize(pos.X, pos.Y, pos.X + 20, pos.Y + 20);
-	irr::core::recti otloc = Resize(pos.X + 7, pos.Y + 50, pos.X + 37, pos.Y + 65);
-	if(drag) {
-		dragloc = irr::core::recti(pos.X, pos.Y, pos.X + CARD_THUMB_WIDTH * xScale, pos.Y + CARD_THUMB_HEIGHT * yScale);
-		limitloc = irr::core::recti(pos.X, pos.Y, pos.X + 20 * xScale, pos.Y + 20 * yScale);
-		otloc = irr::core::recti(pos.X + 7, pos.Y + 50 * yScale, pos.X + 37 * xScale, pos.Y + 65 * yScale);
-	}
+	const float cardScale = xScale < yScale ? xScale : yScale;
+	const irr::core::vector2di topLeft = drag ? pos : Resize(pos.X, pos.Y);
+	const irr::core::recti dragloc(topLeft.X, topLeft.Y, topLeft.X + CARD_THUMB_WIDTH * cardScale, topLeft.Y + CARD_THUMB_HEIGHT * cardScale);
+	const irr::core::recti limitloc(topLeft.X, topLeft.Y, topLeft.X + 20 * cardScale, topLeft.Y + 20 * cardScale);
+	const irr::core::recti otloc(topLeft.X + 7 * cardScale, topLeft.Y + 50 * cardScale, topLeft.X + 37 * cardScale, topLeft.Y + 65 * cardScale);
 	driver->draw2DImage(img, dragloc, irr::core::rect<irr::s32>(0, 0, size.Width, size.Height), 0, 0, true);
 	auto lfit = lflist->content.find(lcode);
 	if (lfit != lflist->content.end()) {
@@ -1381,14 +1525,21 @@ void Game::DrawThumb(const CardDataC* cp, irr::core::vector2di pos, const LFList
 }
 void Game::DrawDeckBd() {
 	wchar_t textBuffer[64];
+	const auto deckText = themeManager.GetDeckTextColor();
+	const auto drawPanel = [this](const irr::core::recti& fill, const irr::core::recti& outline) {
+		if(themeManager.HasVisualStyle())
+			driver->draw2DRectangle(themeManager.GetDeckPanelColor(), fill);
+		else
+			driver->draw2DRectangle(fill, 0x400000ff, 0x400000ff, 0x40000000, 0x40000000);
+		driver->draw2DRectangleOutline(outline, themeManager.GetDeckFrameColor());
+	};
 	//main deck
 	int mainsize = deckManager.current_deck.main.size();
-	driver->draw2DRectangle(Resize(310, 137, 410, 157), 0x400000ff, 0x400000ff, 0x40000000, 0x40000000);
-	driver->draw2DRectangleOutline(Resize(309, 136, 410, 157));
-	DrawShadowText(textFont, dataManager.GetSysString(deckBuilder.showing_pack ? 1477 : 1330), Resize(315, 137, 410, 157), Resize(1, 1, 1, 1), 0xffffffff, 0xff000000, false, true);
-	DrawShadowText(numFont, dataManager.GetNumString(mainsize), Resize(380, 138, 440, 158), Resize(1, 1, 1, 1), 0xffffffff, 0xff000000, false, true);
-	driver->draw2DRectangle(Resize(310, 160, 797, deckBuilder.showing_pack ? 630 : 436), 0x400000ff, 0x400000ff, 0x40000000, 0x40000000);
-	driver->draw2DRectangleOutline(Resize(309, 159, 797, deckBuilder.showing_pack ? 630 : 436));
+	drawPanel(Resize(310, 137, 410, 157), Resize(309, 136, 410, 157));
+	DrawShadowText(textFont, dataManager.GetSysString(deckBuilder.showing_pack ? 1477 : 1330), Resize(315, 137, 410, 157), Resize(1, 1, 1, 1), deckText, 0xff000000, false, true);
+	DrawShadowText(numFont, dataManager.GetNumString(mainsize), Resize(380, 138, 440, 158), Resize(1, 1, 1, 1), deckText, 0xff000000, false, true);
+	drawPanel(Resize(310, 160, 797, deckBuilder.showing_pack ? 630 : 436),
+		Resize(309, 159, 797, deckBuilder.showing_pack ? 630 : 436));
 	int lx;
 	int dy = 68;
 	float dx;
@@ -1417,12 +1568,10 @@ void Game::DrawDeckBd() {
 	}
 	if(!deckBuilder.showing_pack) {
 		//extra deck
-		driver->draw2DRectangle(Resize(310, 440, 410, 460), 0x400000ff, 0x400000ff, 0x40000000, 0x40000000);
-		driver->draw2DRectangleOutline(Resize(309, 439, 410, 460));
-		DrawShadowText(textFont, dataManager.GetSysString(1331), Resize(315, 440, 410, 460), Resize(1, 1, 1, 1), 0xffffffff, 0xff000000, false, true);
-		DrawShadowText(numFont, dataManager.GetNumString(deckManager.current_deck.extra.size()), Resize(380, 441, 440, 461), Resize(1, 1, 1, 1), 0xffffffff, 0xff000000, false, true);
-		driver->draw2DRectangle(Resize(310, 463, 797, 533), 0x400000ff, 0x400000ff, 0x40000000, 0x40000000);
-		driver->draw2DRectangleOutline(Resize(309, 462, 797, 533));
+		drawPanel(Resize(310, 440, 410, 460), Resize(309, 439, 410, 460));
+		DrawShadowText(textFont, dataManager.GetSysString(1331), Resize(315, 440, 410, 460), Resize(1, 1, 1, 1), deckText, 0xff000000, false, true);
+		DrawShadowText(numFont, dataManager.GetNumString(deckManager.current_deck.extra.size()), Resize(380, 441, 440, 461), Resize(1, 1, 1, 1), deckText, 0xff000000, false, true);
+		drawPanel(Resize(310, 463, 797, 533), Resize(309, 462, 797, 533));
 		if(deckManager.current_deck.extra.size() <= 10)
 			dx = 436.0f / 9;
 		else dx = 436.0f / (deckManager.current_deck.extra.size() - 1);
@@ -1432,12 +1581,10 @@ void Game::DrawDeckBd() {
 				driver->draw2DRectangleOutline(Resize(313 + i * dx, 465, 359 + i * dx, 531));
 		}
 		//side deck
-		driver->draw2DRectangle(Resize(310, 537, 410, 557), 0x400000ff, 0x400000ff, 0x40000000, 0x40000000);
-		driver->draw2DRectangleOutline(Resize(309, 536, 410, 557));
-		DrawShadowText(textFont, dataManager.GetSysString(1332), Resize(315, 537, 410, 557), Resize(1, 1, 1, 1), 0xffffffff, 0xff000000, false, true);
-		DrawShadowText(numFont, dataManager.GetNumString(deckManager.current_deck.side.size()), Resize(380, 538, 440, 558), Resize(1, 1, 1, 1), 0xffffffff, 0xff000000, false, true);
-		driver->draw2DRectangle(Resize(310, 560, 797, 630), 0x400000ff, 0x400000ff, 0x40000000, 0x40000000);
-		driver->draw2DRectangleOutline(Resize(309, 559, 797, 630));
+		drawPanel(Resize(310, 537, 410, 557), Resize(309, 536, 410, 557));
+		DrawShadowText(textFont, dataManager.GetSysString(1332), Resize(315, 537, 410, 557), Resize(1, 1, 1, 1), deckText, 0xff000000, false, true);
+		DrawShadowText(numFont, dataManager.GetNumString(deckManager.current_deck.side.size()), Resize(380, 538, 440, 558), Resize(1, 1, 1, 1), deckText, 0xff000000, false, true);
+		drawPanel(Resize(310, 560, 797, 630), Resize(309, 559, 797, 630));
 		if(deckManager.current_deck.side.size() <= 10)
 			dx = 436.0f / 9;
 		else dx = 436.0f / (deckManager.current_deck.side.size() - 1);
@@ -1449,16 +1596,13 @@ void Game::DrawDeckBd() {
 	}
 	if(is_siding) {
 		// side chat background
-		driver->draw2DRectangle(Resize(805, 10, 1020, 630), 0x400000ff, 0x400000ff, 0x40000000, 0x40000000);
-		driver->draw2DRectangleOutline(Resize(804, 9, 1020, 630));
+		drawPanel(Resize(805, 10, 1020, 630), Resize(804, 9, 1020, 630));
 	} else {
 		//search result
-		driver->draw2DRectangle(Resize(805, 137, 926, 157), 0x400000ff, 0x400000ff, 0x40000000, 0x40000000);
-		driver->draw2DRectangleOutline(Resize(804, 136, 926, 157));
-		DrawShadowText(textFont, dataManager.GetSysString(1333), Resize(810, 137, 915, 157), Resize(1, 1, 1, 1), 0xffffffff, 0xff000000, false, true);
-		DrawShadowText(numFont, deckBuilder.result_string, Resize(875, 137, 935, 157), Resize(1, 1, 1, 1), 0xffffffff, 0xff000000, false, true);
-		driver->draw2DRectangle(Resize(805, 160, 1020, 630), 0x400000ff, 0x400000ff, 0x40000000, 0x40000000);
-		driver->draw2DRectangleOutline(Resize(804, 159, 1020, 630));
+		drawPanel(Resize(805, 137, 926, 157), Resize(804, 136, 926, 157));
+		DrawShadowText(textFont, dataManager.GetSysString(1333), Resize(810, 137, 915, 157), Resize(1, 1, 1, 1), deckText, 0xff000000, false, true);
+		DrawShadowText(numFont, deckBuilder.result_string, Resize(875, 137, 935, 157), Resize(1, 1, 1, 1), deckText, 0xff000000, false, true);
+		drawPanel(Resize(805, 160, 1020, 630), Resize(804, 159, 1020, 630));
 	}
 	int max_result = gameConf.use_image_load_background_thread ? 9 : 7;
 	for(int i = 0; i < max_result && i + scrFilter->getPos() < (int)deckBuilder.results.size(); ++i) {
@@ -1519,7 +1663,7 @@ void Game::DrawDeckBd() {
 		}
 	}
 	if(deckBuilder.is_draging) {
-		DrawThumb(deckBuilder.draging_pointer, irr::core::vector2di(deckBuilder.dragx - CARD_THUMB_WIDTH / 2 * xScale, deckBuilder.dragy - CARD_THUMB_HEIGHT / 2 * yScale), deckBuilder.filterList, true);
+		DrawThumb(deckBuilder.draging_pointer, irr::core::vector2di(deckBuilder.dragx - CARD_THUMB_WIDTH / 2 * (xScale < yScale ? xScale : yScale), deckBuilder.dragy - CARD_THUMB_HEIGHT / 2 * (xScale < yScale ? xScale : yScale)), deckBuilder.filterList, true);
 	}
 }
 }

@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "id": "gilded",
+  "name": "Gilded Duel Terminal",
+  "colors": {
+    "3DDarkShadow": "#FF07131C",
+    "3DShadow": "#FF24313B",
+    "3DFace": "#EF0A1821",
+    "3DHighlight": "#FF10222C",
+    "3DLight": "#FFC99B46",
+    "ActiveBorder": "#FF0D2733",
+    "ActiveCaption": "#FFF0D27D",
+    "AppWorkspace": "#EF07151E",
+    "ButtonText": "#FFF0F2EF",
+    "GrayText": "#FF87959D",
+    "Highlight": "#FF006880",
+    "HighlightText": "#FFF0FCFF",
+    "InactiveBorder": "#FF101D26",
+    "InactiveCaption": "#FF88969C",
+    "ToolTip": "#FFF0DAA1",
+    "ToolTipBackground": "#F20F202B",
+    "ScrollBar": "#FF18303C",
+    "Window": "#F00A1720",
+    "WindowSymbol": "#FFE8C36E",
+    "Icon": "#FFD9AE55",
+    "IconHighlight": "#FF18DDF7",
+    "GrayWindowSymbol": "#FF71818C",
+    "Editable": "#F0081821",
+    "GrayEditable": "#EF151F26",
+    "FocusedEditable": "#F20B303F"
+  },
+  "assets": {
+    "backdrop": "assets/backdrop.png",
+    "logo": "assets/logo.png"
+  },
+  "pile_count_text": "#FFF2C96C",
+  "ui": {
+    "frame": "#FFE0B65B",
+    "circuit": "#A89B793B",
+    "focus": "#FF10DDF7",
+    "error": "#FFE56A60",
+    "backdrop": "#FF06131B",
+    "panel": "#EA0B1A24"
+  },
+  "spacing": {
+    "text_x": 6,
+    "text_y": 4,
+    "title_x": 12
+  }
+}

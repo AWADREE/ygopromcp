@@ -1,0 +1,217 @@
+{
+  "schema_version": 1,
+  "reviewed_asset_commit": "933cb20f8fda10f1cb6ebd1e0f2f49fd4d564762",
+  "source_manifest_sha256": "8AAA70E6F47B1F8ACD9060B2C3CA02C43A8B3D16009EBBF820C7F8AD5849B251",
+  "runtime_files": [
+    {
+      "source_path": "fonts/numFont.otf",
+      "destination_path": "fonts/numFont.otf",
+      "size": 17002248,
+      "sha256": "B5F0D1A190A7F9B43C310A8850630AF12553DF32C4C050543F9059732D9B4C0A",
+      "license": "OFL-1.1"
+    },
+    {
+      "source_path": "fonts/textFont.otf",
+      "destination_path": "fonts/textFont.otf",
+      "size": 16437364,
+      "sha256": "2C76254F6FC379FDDFCE0A7E84FB5385BB135D3E399294F6EEB6680D0365B74B",
+      "license": "OFL-1.1"
+    },
+    {
+      "source_path": "licenses/NotoSansCJK-OFL-1.1.txt",
+      "destination_path": "THIRD_PARTY_LICENSES/NotoSansCJK/OFL.txt",
+      "size": 4393,
+      "sha256": "88F117575237307BDD86A17EF15E21790FC9A662FE4DFB103CA1CA077F0D9982",
+      "license": "OFL-1.1"
+    },
+    {
+      "source_path": "textures/act.png",
+      "destination_path": "textures/act.png",
+      "size": 578,
+      "sha256": "697E3A3B8B376E618DC726627A655EA360FE59DEECBAFB2890CE32B21C5F90B7",
+      "license": "GPL-2.0"
+    },
+    {
+      "source_path": "textures/attack.png",
+      "destination_path": "textures/attack.png",
+      "size": 581,
+      "sha256": "43860E5BD143684A9D9CB4A2DA6F979C5AACA62D940A0448F6DA0055B5D458B2",
+      "license": "GPL-2.0"
+    },
+    {
+      "source_path": "textures/bg_deck.jpg",
+      "destination_path": "textures/bg_deck.jpg",
+      "size": 80393,
+      "sha256": "DA97AC82101992BF49223595D5FA59F5C4F0E903E285881D46DAA04CCEBFB892",
+      "license": "GPL-2.0"
+    },
+    {
+      "source_path": "textures/bg_menu.jpg",
+      "destination_path": "textures/bg_menu.jpg",
+      "size": 80304,
+      "sha256": "109A13A78A1332308320AD4FA0CDAFB395E8B501DCD20504C8EA663A75B8B7E1",
+      "license": "GPL-2.0"
+    },
+    {
+      "source_path": "textures/bg.jpg",
+      "destination_path": "textures/bg.jpg",
+      "size": 80341,
+      "sha256": "850414AFA619A93ED667EF45ED7A5264B003FB6A04FCD701D394CCDEB0F88809",
+      "license": "GPL-2.0"
+    },
+    {
+      "source_path": "textures/chain.png",
+      "destination_path": "textures/chain.png",
+      "size": 574,
+      "sha256": "7D73CA5A130B5242F03DF1F94B7AC94B174184F97CD444C0BB138021C52F2449",
+      "license": "GPL-2.0"
+    },
+    {
+      "source_path": "textures/chaintarget.png",
+      "destination_path": "textures/chaintarget.png",
+      "size": 184,
+      "sha256": "2691F83222B49F505089D079E5FCA6A7BDCC8806A1AA7C5241AC7BC7F68B0D5C",
+      "license": "GPL-2.0"
+    },
+    {
+      "source_path": "textures/cover.png",
+      "destination_path": "textures/cover.png",
+      "size": 8419,
+      "sha256": "40B647077B89DE74C33B8754B02A7057A94B67BE81C0FFB9AA93BFBC8BE0C45A",
+      "license": "GPL-2.0"
+    },
+    {
+      "source_path": "textures/cover2.png",
+      "destination_path": "textures/cover2.png",
+      "size": 8387,
+      "sha256": "C570BCECEA7BF8CD789A0D6A91B0D41BF905C049E4DA4A9A63A6410E6BAE1C80",
+      "license": "GPL-2.0"
+    },
+    {
+      "source_path": "textures/equip.png",
+      "destination_path": "textures/equip.png",
+      "size": 187,
+      "sha256": "03BA671241CA2474C33621163CCB9AA57A0300D147FD53464EB92A4D7FC1777E",
+      "license": "GPL-2.0"
+    },
+    {
+      "source_path": "textures/f1.jpg",
+      "destination_path": "textures/f1.jpg",
+      "size": 5553,
+      "sha256": "9C0D24AC75F47241D751F785191AC26C05C43301387B3AD01D5F29670B412819",
+      "license": "GPL-2.0"
+    },
+    {
+      "source_path": "textures/f2.jpg",
+      "destination_path": "textures/f2.jpg",
+      "size": 5533,
+      "sha256": "85DC2E3CF3DC315269C671B1EC29E63C1014501B97124928EA4CA493284FBC59",
+      "license": "GPL-2.0"
+    },
+    {
+      "source_path": "textures/f3.jpg",
+      "destination_path": "textures/f3.jpg",
+      "size": 5388,
+      "sha256": "6806D0B3575CB9ED768971960865F8201BA7740FA1472CED37E91EF5A1C6B6A6",
+      "license": "GPL-2.0"
+    },
+    {
+      "source_path": "textures/field-transparent2.png",
+      "destination_path": "textures/field-transparent2.png",
+      "size": 1328,
+      "sha256": "5029DB98AE4CCF8786A6691161781FB3BF37026B49746F45C093E857EB65557B",
+      "license": "GPL-2.0"
+    },
+    {
+      "source_path": "textures/field-transparent3.png",
+      "destination_path": "textures/field-transparent3.png",
+      "size": 1404,
+      "sha256": "8BE645E761335EB71BEA0A87113A93219906BED79318BB71CE17AE4D7986FD77",
+      "license": "GPL-2.0"
+    },
+    {
+      "source_path": "textures/field.png",
+      "destination_path": "textures/field.png",
+      "size": 1492,
+      "sha256": "58DFCAB0904D014B914A1D39533328168E8294C39F162229915C6BF02EF8893B",
+      "license": "GPL-2.0"
+    },
+    {
+      "source_path": "textures/field2.png",
+      "destination_path": "textures/field2.png",
+      "size": 1768,
+      "sha256": "A926872A2504B938FFF29050DBDDB31545A35E8BE2976556B0FC8872DEA107B0",
+      "license": "GPL-2.0"
+    },
+    {
+      "source_path": "textures/field3.png",
+      "destination_path": "textures/field3.png",
+      "size": 1828,
+      "sha256": "4F71ED2E752E34AFDBB4852E594017C671650B43763F8C96A624885F629E3F31",
+      "license": "GPL-2.0"
+    },
+    {
+      "source_path": "textures/lim.png",
+      "destination_path": "textures/lim.png",
+      "size": 897,
+      "sha256": "8C12AC6ECD507FED8533F18494B7C33550D2CB4F0219E30233511720B0996CD9",
+      "license": "GPL-2.0"
+    },
+    {
+      "source_path": "textures/lp.png",
+      "destination_path": "textures/lp.png",
+      "size": 162,
+      "sha256": "30F52C507630A1F87F5F846DDAB7BBABF94DA76350A6D0BE38585B22D0C88957",
+      "license": "GPL-2.0"
+    },
+    {
+      "source_path": "textures/lpf.png",
+      "destination_path": "textures/lpf.png",
+      "size": 152,
+      "sha256": "70D98213589FFD1ADBCC3476BA4592E6A18C6CA59AD50D6B8E24F1D12C3B7BBC",
+      "license": "GPL-2.0"
+    },
+    {
+      "source_path": "textures/mask.png",
+      "destination_path": "textures/mask.png",
+      "size": 919,
+      "sha256": "B5F7ACF85EBACA9571A5CFB74FA59F4265C4E112644ABAE3C04EBCB24A5EE72B",
+      "license": "GPL-2.0"
+    },
+    {
+      "source_path": "textures/negated.png",
+      "destination_path": "textures/negated.png",
+      "size": 558,
+      "sha256": "6B420921A7F914200C4AFD5875B334CDFC552A3144E0BAC02AAD3E051A30580C",
+      "license": "GPL-2.0"
+    },
+    {
+      "source_path": "textures/number.png",
+      "destination_path": "textures/number.png",
+      "size": 1435,
+      "sha256": "4FD8F25FD2A4C30E7C1B08E1E8D88FCFA5274EB5AF79CDD008C907662F0311EA",
+      "license": "GPL-2.0"
+    },
+    {
+      "source_path": "textures/ot.png",
+      "destination_path": "textures/ot.png",
+      "size": 818,
+      "sha256": "C52EAA9B3D8ED9DB88E3F3946FBD710E519733E506D0ABE1A43E4DBE23031E23",
+      "license": "GPL-2.0"
+    },
+    {
+      "source_path": "textures/target.png",
+      "destination_path": "textures/target.png",
+      "size": 180,
+      "sha256": "338D34050BE0C1ECEAFE78F9FFFE2C61267DA6F886B3D2A227495DA553F4EE57",
+      "license": "GPL-2.0"
+    },
+    {
+      "source_path": "textures/unknown.jpg",
+      "destination_path": "textures/unknown.jpg",
+      "size": 8824,
+      "sha256": "21D1C6AFF3EF49804341C8F555216DE72FFF994970E8DAB128F2B52797997437",
+      "license": "GPL-2.0"
+    }
+  ]
+}

@@ -1,0 +1,160 @@
+{
+  "schema_version": 1,
+  "source": "Official MSYS2 source-only tarballs for locally installed UCRT64 binary packages; downloaded 2026-10-25",
+  "archives": [
+    {
+      "name": "mingw-w64-brotli-1.2.1-1.src.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/sources/mingw-w64-brotli-1.2.1-1.src.tar.zst",
+      "size": 645162,
+      "sha256": "3dfc69b88a111ef4809928e81d4cb650ea9c7ba5da4ebd1bf28d6effdeeb6bd6",
+      "installed_packages": [
+        "mingw-w64-ucrt-x86_64-brotli-1.2.1-1"
+      ]
+    },
+    {
+      "name": "mingw-w64-bzip2-1.0.8-4.src.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/sources/mingw-w64-bzip2-1.0.8-4.src.tar.zst",
+      "size": 818825,
+      "sha256": "fd9360917314d1cbccb3cb15ed8450d1e56b8a9f733b606504aba52c52159e54",
+      "installed_packages": [
+        "mingw-w64-ucrt-x86_64-bzip2-1.0.8-4"
+      ]
+    },
+    {
+      "name": "mingw-w64-freetype-2.15.0-1.src.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/sources/mingw-w64-freetype-2.15.0-1.src.tar.zst",
+      "size": 2720468,
+      "sha256": "2f09c60b72bd249642d055aa5a34edf2577392e592415f3f4730dd37990b47ad",
+      "installed_packages": [
+        "mingw-w64-ucrt-x86_64-freetype-2.15.0-1"
+      ]
+    },
+    {
+      "name": "mingw-w64-gcc-16.2.0-6.src.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/sources/mingw-w64-gcc-16.2.0-6.src.tar.zst",
+      "size": 107229138,
+      "sha256": "a901d8afb78438abcff9ed020cd9aa9431db76de1992171c2454c3c07ad289e8",
+      "installed_packages": [
+        "mingw-w64-ucrt-x86_64-libgcc-16.2.0-6",
+        "mingw-w64-ucrt-x86_64-libstdc++-16.2.0-6"
+      ]
+    },
+    {
+      "name": "mingw-w64-gettext-1.0-1.src.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/sources/mingw-w64-gettext-1.0-1.src.tar.zst",
+      "size": 10267655,
+      "sha256": "cca0d0c8f60353faccc5ad40405240014e4a7ccc8b1c6ca9f4626aef3097d26e",
+      "installed_packages": [
+        "mingw-w64-ucrt-x86_64-gettext-runtime-1.0-1"
+      ]
+    },
+    {
+      "name": "mingw-w64-glib2-2.90.1-1.src.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/sources/mingw-w64-glib2-2.90.1-1.src.tar.zst",
+      "size": 5875958,
+      "sha256": "ac3bc00e4079e6b51dd0a1fb9ccc420fff033b4e9095e4487dbf6cf01312cee6",
+      "installed_packages": [
+        "mingw-w64-ucrt-x86_64-glib2-2.90.1-1"
+      ]
+    },
+    {
+      "name": "mingw-w64-graphite2-1.3.15-1.src.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/sources/mingw-w64-graphite2-1.3.15-1.src.tar.zst",
+      "size": 13317053,
+      "sha256": "eb76ce274c68ea6bad0883144c21e44a803ec94fed9dc0f6584feb0a8415a1d6",
+      "installed_packages": [
+        "mingw-w64-ucrt-x86_64-graphite2-1.3.15-1"
+      ]
+    },
+    {
+      "name": "mingw-w64-harfbuzz-14.6.0-1.src.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/sources/mingw-w64-harfbuzz-14.6.0-1.src.tar.zst",
+      "size": 20299472,
+      "sha256": "6c02c446b27412717a760eca77ac6ed997b294fdc390a5e5f46760ebda8a7c64",
+      "installed_packages": [
+        "mingw-w64-ucrt-x86_64-harfbuzz-14.6.0-1"
+      ]
+    },
+    {
+      "name": "mingw-w64-libevent-2.1.13-1.src.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/sources/mingw-w64-libevent-2.1.13-1.src.tar.zst",
+      "size": 1138747,
+      "sha256": "9c0ed6d7a3f2c6703755c907fd9d2fba01ec6c3ec1135b40e7ed46fbce646234",
+      "installed_packages": [
+        "mingw-w64-ucrt-x86_64-libevent-2.1.13-1"
+      ]
+    },
+    {
+      "name": "mingw-w64-libiconv-1.19-1.src.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/sources/mingw-w64-libiconv-1.19-1.src.tar.zst",
+      "size": 5131029,
+      "sha256": "74428280c17094da5b702c29b2e1a0abae59556ea5dfdd65705cc8ccc1e000fb",
+      "installed_packages": [
+        "mingw-w64-ucrt-x86_64-libiconv-1.19-1"
+      ]
+    },
+    {
+      "name": "mingw-w64-libjpeg-turbo-3.2.0-1.src.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/sources/mingw-w64-libjpeg-turbo-3.2.0-1.src.tar.zst",
+      "size": 2536411,
+      "sha256": "98bfbef730e79ca74c88842eb27730db11429dbae4d95e0f5d7859e316026a74",
+      "installed_packages": [
+        "mingw-w64-ucrt-x86_64-libjpeg-turbo-3.2.0-1"
+      ]
+    },
+    {
+      "name": "mingw-w64-libpng-1.6.59-2.src.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/sources/mingw-w64-libpng-1.6.59-2.src.tar.zst",
+      "size": 1611367,
+      "sha256": "7f7c029d119427fe7b36be8a79228f831062bedadee1f49c9e0919fe6d7a459a",
+      "installed_packages": [
+        "mingw-w64-ucrt-x86_64-libpng-1.6.59-2"
+      ]
+    },
+    {
+      "name": "mingw-w64-pcre2-10.49-1.src.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/sources/mingw-w64-pcre2-10.49-1.src.tar.zst",
+      "size": 2183818,
+      "sha256": "b02f0d5070b7d7f6db5c8ba9b009f28c1a07b9b52aaf7964dc0c8b098e4088d1",
+      "installed_packages": [
+        "mingw-w64-ucrt-x86_64-pcre2-10.49-1"
+      ]
+    },
+    {
+      "name": "mingw-w64-sqlite3-3.54.0-1.src.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/sources/mingw-w64-sqlite3-3.54.0-1.src.tar.zst",
+      "size": 25776167,
+      "sha256": "68cf8bed1ebc907c83efeae3523e33421fc21afd58e1ab1aec27a6559038265e",
+      "installed_packages": [
+        "mingw-w64-ucrt-x86_64-sqlite3-3.54.0-1"
+      ]
+    },
+    {
+      "name": "mingw-w64-winpthreads-14.0.0.r532.gdbbc8e99d-1.src.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/sources/mingw-w64-winpthreads-14.0.0.r532.gdbbc8e99d-1.src.tar.zst",
+      "size": 55157516,
+      "sha256": "79202508d71447ae6cb3dbd434d8045408b8ec7105e4018eb8dddff34be6ff5c",
+      "installed_packages": [
+        "mingw-w64-ucrt-x86_64-libwinpthread-14.0.0.r532.gdbbc8e99d-1"
+      ]
+    },
+    {
+      "name": "mingw-w64-xz-5.8.4-1.src.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/sources/mingw-w64-xz-5.8.4-1.src.tar.zst",
+      "size": 1569458,
+      "sha256": "b8acbc56b2bfe08df7bffff423f3bf07ee85dbec4e07416017ab04c8afb9d13e",
+      "installed_packages": [
+        "mingw-w64-ucrt-x86_64-xz-5.8.4-1"
+      ]
+    },
+    {
+      "name": "mingw-w64-zlib-1.3.2-3.src.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/sources/mingw-w64-zlib-1.3.2-3.src.tar.zst",
+      "size": 1326411,
+      "sha256": "4b7839ab2826d3e3d27fe46150d2180a1f561f4d03c9e82aeb4b056180561f00",
+      "installed_packages": [
+        "mingw-w64-ucrt-x86_64-zlib-1.3.2-3"
+      ]
+    }
+  ]
+}

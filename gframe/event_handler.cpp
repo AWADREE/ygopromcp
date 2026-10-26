@@ -3,6 +3,7 @@
 #include "client_field.h"
 #include "network.h"
 #include "game.h"
+#include "field_projection.h"
 #include "duelclient.h"
 #include "data_manager.h"
 #include "image_manager.h"
@@ -1023,7 +1024,7 @@ bool ClientField::OnEvent(const irr::SEvent& event) {
 				break;
 			if(panel && panel->isVisible())
 				break;
-			GetHoverField(x, y);
+			GetHoverField(mousepos.X, mousepos.Y);
 			if(hovered_location & 0xe)
 				clicked_card = GetCard(hovered_controler, hovered_location, hovered_sequence);
 			else clicked_card = 0;
@@ -1348,6 +1349,7 @@ bool ClientField::OnEvent(const irr::SEvent& event) {
 			irr::s32 x = pos.X;
 			irr::s32 y = pos.Y;
 			wchar_t formatBuffer[2048];
+			hovered_location = 0;
 			if(x < 300) {
 				irr::gui::IGUIElement* root = mainGame->env->getRootGUIElement();
 				irr::gui::IGUIElement* elem = root->getElementFromPoint(pos);
@@ -1361,11 +1363,10 @@ bool ClientField::OnEvent(const irr::SEvent& event) {
 				mainGame->stTip->setVisible(should_show_tip);
 				break;
 			}
-			hovered_location = 0;
 			ClientCard* mcard = 0;
 			int mplayer = -1;
 			if(!panel || !panel->isVisible() || !panel->getRelativePosition().isPointInside(mousepos)) {
-				GetHoverField(x, y);
+				GetHoverField(mousepos.X, mousepos.Y);
 				if(hovered_location & 0xe)
 					mcard = GetCard(hovered_controler, hovered_location, hovered_sequence);
 				else if(hovered_location == LOCATION_GRAVE) {
@@ -1408,7 +1409,8 @@ bool ClientField::OnEvent(const irr::SEvent& event) {
 				if(hovered_card) {
 					if(hovered_card->location == LOCATION_HAND && !mainGame->dInfo.is_shuffling && mainGame->dInfo.curMsg != MSG_SHUFFLE_HAND) {
 						hovered_card->is_hovered = false;
-						MoveCard(hovered_card, 5);
+						if(!(mainGame->gameConf.modern_field_view && hovered_card->controler == 0))
+							MoveCard(hovered_card, 5);
 						if(hovered_controler == 0)
 							mainGame->hideChat = false;
 					}
@@ -1419,7 +1421,8 @@ bool ClientField::OnEvent(const irr::SEvent& event) {
 						HideMenu();
 					if(hovered_location == LOCATION_HAND) {
 						mcard->is_hovered = true;
-						MoveCard(mcard, 5);
+						if(!(mainGame->gameConf.modern_field_view && mcard->controler == 0))
+							MoveCard(mcard, 5);
 						if(hovered_controler == 0)
 							mainGame->hideChat = true;
 					}
@@ -1803,6 +1806,10 @@ bool ClientField::OnCommonEvent(const irr::SEvent& event) {
 		}
 		case irr::gui::EGET_COMBO_BOX_CHANGED: {
 			switch(id) {
+			case COMBOBOX_THEME: {
+				mainGame->SelectTheme(mainGame->cbTheme->getSelected() == 1 ? "gilded" : "classic");
+				return true;
+			}
 			case COMBOBOX_LFLIST: {
 				mainGame->gameConf.default_lflist = mainGame->cbLFlist->getSelected();
 				mainGame->cbHostLFlist->setSelected(mainGame->gameConf.default_lflist);
@@ -1945,11 +1952,53 @@ bool ClientField::OnCommonEvent(const irr::SEvent& event) {
 	return false;
 }
 void ClientField::GetHoverField(int x, int y) {
+	const int screenX = x;
+	const int screenY = y;
+	const bool modern = mainGame->gameConf.modern_field_view;
+	const auto fieldProjection = GetFieldProjectionForView(mainGame->window_size.Width, mainGame->window_size.Height,
+		modern || mainGame->gameConf.preserve_field_aspect, modern);
+	if(modern) {
+		// Project the exact rendered hand quads, including hover lift, rotation,
+		// face-down cards and local hand scale. Test cards back to front so the
+		// topmost visible overlap receives the click.
+		auto* collision = mainGame->smgr->getSceneCollisionManager();
+		for(int player = 0; player < 2; ++player) {
+			for(int sequence = static_cast<int>(hand[player].size()) - 1; sequence >= 0; --sequence) {
+				const auto* card = hand[player][sequence];
+				if(!card)
+					continue;
+				const auto transform = mainGame->GetCardRenderTransform(card);
+				irr::core::position2di corners[4];
+				for(int i = 0; i < 4; ++i) {
+					auto world = matManager.vCardFront[i].Pos;
+					transform.transformVect(world);
+					corners[i] = collision->getScreenCoordinatesFrom3DPosition(world, mainGame->camera);
+				}
+				const auto inTriangle = [&](int a, int b, int c) {
+					const auto cross = [&](int i, int j) {
+						return static_cast<double>(corners[j].X - corners[i].X) * (screenY - corners[i].Y)
+							- static_cast<double>(corners[j].Y - corners[i].Y) * (screenX - corners[i].X);
+					};
+					const double ab = cross(a, b), bc = cross(b, c), ca = cross(c, a);
+					return (ab >= 0 && bc >= 0 && ca >= 0) || (ab <= 0 && bc <= 0 && ca <= 0);
+				};
+				if(inTriangle(0, 1, 3) || inTriangle(0, 3, 2)) {
+					hovered_controler = player;
+					hovered_location = LOCATION_HAND;
+					hovered_sequence = sequence;
+					return;
+				}
+			}
+		}
+	} else {
+		x = static_cast<int>(fieldProjection.ClassicX(x / mainGame->xScale));
+		y = static_cast<int>(fieldProjection.ClassicY(y / mainGame->yScale));
+	}
 	irr::core::recti sfRect(430, 504, 875, 600);
 	irr::core::recti ofRect(531, 135, 800, 191);
 	irr::core::vector2di pos(x, y);
 	int rule = (mainGame->dInfo.duel_rule >= 4) ? 1 : 0;
-	if(sfRect.isPointInside(pos)) {
+	if(!modern && sfRect.isPointInside(pos)) {
 		int hc = hand[0].size();
 		int cardSize = 66;
 		int cardSpace = 10;
@@ -1976,7 +2025,7 @@ void ClientField::GetHoverField(int x, int y) {
 			else
 				hovered_sequence = (x - sfRect.UpperLeftCorner.X) * (hc - 1) / ((cardSize + cardSpace) * 5);
 		}
-	} else if(ofRect.isPointInside(pos)) {
+	} else if(!modern && ofRect.isPointInside(pos)) {
 		int hc = hand[1].size();
 		int cardSize = 39;
 		int cardSpace = 7;
@@ -2004,12 +2053,16 @@ void ClientField::GetHoverField(int x, int y) {
 				hovered_sequence = hc - 1 - (x - ofRect.UpperLeftCorner.X) * (hc - 1) / ((cardSize + cardSpace) * 5);
 		}
 	} else {
-		double screenx = x / static_cast<double>(GAME_WINDOW_WIDTH) * 1.35 - 0.90;
-		double screeny = y / static_cast<double>(GAME_WINDOW_HEIGHT) * 0.84 - 0.42;
-		double angle = 0.798056 - atan(screeny);	//0.798056 = arctan(8.0/7.8)
-		double vlen = sqrt(1.0 + screeny * screeny);
-		double boardx = 4.2 + 7.8 * screenx / vlen / cos(angle);
-		double boardy = 8.0 - 7.8 * tan(angle);
+		const auto board = ScreenToBoard(screenX, screenY, mainGame->window_size.Width,
+			mainGame->window_size.Height, fieldProjection, GetFieldCamera(modern));
+		const double boardx = board.x;
+		const double boardy = board.y;
+		const auto withinZone = [&](const irr::video::S3DVertex* zone, double margin = 0.0) {
+			const double left = zone[0].Pos.X < zone[1].Pos.X ? zone[0].Pos.X : zone[1].Pos.X;
+			const double right = zone[0].Pos.X > zone[1].Pos.X ? zone[0].Pos.X : zone[1].Pos.X;
+			return !modern || (boardx >= left - margin && boardx <= right + margin);
+		};
+		const double defenseMargin = modern ? MODERN_DEFENSE_PICK_MARGIN : 0.0;
 		hovered_location = 0;
 		if(boardx >= matManager.vFieldExtra[0][0].Pos.X && boardx <= matManager.vFieldExtra[0][1].Pos.X) {
 			if(boardy >= matManager.vFieldExtra[0][0].Pos.Y && boardy <= matManager.vFieldExtra[0][2].Pos.Y) {
@@ -2091,20 +2144,31 @@ void ClientField::GetHoverField(int x, int y) {
 				hovered_controler = 0;
 				hovered_location = LOCATION_REMOVED;
 			}
-		} else if(boardx >= matManager.vFieldMzone[0][0][0].Pos.X && boardx <= matManager.vFieldMzone[0][4][1].Pos.X) {
-			int sequence = (boardx - matManager.vFieldMzone[0][0][0].Pos.X) / (matManager.vFieldMzone[0][0][1].Pos.X - matManager.vFieldMzone[0][0][0].Pos.X);
+		} else if(boardx >= matManager.vFieldMzone[0][0][0].Pos.X - defenseMargin && boardx <= matManager.vFieldMzone[0][4][1].Pos.X + defenseMargin) {
+			int sequence;
+			if(modern) {
+				// Defense cards extend into the visual zone margins. Choose the
+				// nearest zone center before testing its exact pick boundary.
+				// This also keeps Extra Monster Zone 5/6 aligned with columns 1/3.
+				const double firstCenter = (matManager.vFieldMzone[0][0][0].Pos.X + matManager.vFieldMzone[0][0][1].Pos.X) * 0.5;
+				const double pitch = matManager.vFieldMzone[0][1][0].Pos.X - matManager.vFieldMzone[0][0][0].Pos.X;
+				sequence = NearestModernZoneColumn(boardx, firstCenter, pitch);
+			} else {
+				// Preserve Classic's original left-edge column mapping.
+				sequence = (boardx - matManager.vFieldMzone[0][0][0].Pos.X) / (matManager.vFieldMzone[0][0][1].Pos.X - matManager.vFieldMzone[0][0][0].Pos.X);
+			}
 			if(sequence > 4)
 				sequence = 4;
-			if(boardy > matManager.vFieldSzone[0][0][rule][0].Pos.Y && boardy <= matManager.vFieldSzone[0][0][rule][2].Pos.Y) {
+			if(boardy > matManager.vFieldSzone[0][0][rule][0].Pos.Y && boardy <= matManager.vFieldSzone[0][0][rule][2].Pos.Y && withinZone(matManager.vFieldSzone[0][sequence][rule])) {
 				hovered_controler = 0;
 				hovered_location = LOCATION_SZONE;
 				hovered_sequence = sequence;
-			} else if(boardy >= matManager.vFieldMzone[0][0][0].Pos.Y && boardy <= matManager.vFieldMzone[0][0][2].Pos.Y) {
+			} else if(boardy >= matManager.vFieldMzone[0][0][0].Pos.Y && boardy <= matManager.vFieldMzone[0][0][2].Pos.Y && withinZone(matManager.vFieldMzone[0][sequence], defenseMargin)) {
 				hovered_controler = 0;
 				hovered_location = LOCATION_MZONE;
 				hovered_sequence = sequence;
 			} else if(boardy >= matManager.vFieldMzone[0][5][0].Pos.Y && boardy <= matManager.vFieldMzone[0][5][2].Pos.Y) {
-				if(sequence == 1) {
+				if(sequence == 1 && withinZone(matManager.vFieldMzone[0][5], defenseMargin)) {
 					if (mzone[0][5]) {
 						hovered_controler = 0;
 						hovered_location = LOCATION_MZONE;
@@ -2133,7 +2197,7 @@ void ClientField::GetHoverField(int x, int y) {
 						hovered_sequence = 5;
 					}
 				}
-				else if(sequence == 3) {
+				else if(sequence == 3 && withinZone(matManager.vFieldMzone[0][6], defenseMargin)) {
 					if (mzone[0][6]) {
 						hovered_controler = 0;
 						hovered_location = LOCATION_MZONE;
@@ -2162,11 +2226,11 @@ void ClientField::GetHoverField(int x, int y) {
 						hovered_sequence = 6;
 					}
 				}
-			} else if(boardy >= matManager.vFieldMzone[1][0][2].Pos.Y && boardy <= matManager.vFieldMzone[1][0][0].Pos.Y) {
+			} else if(boardy >= matManager.vFieldMzone[1][0][2].Pos.Y && boardy <= matManager.vFieldMzone[1][0][0].Pos.Y && withinZone(matManager.vFieldMzone[1][4 - sequence], defenseMargin)) {
 				hovered_controler = 1;
 				hovered_location = LOCATION_MZONE;
 				hovered_sequence = 4 - sequence;
-			} else if(boardy >= matManager.vFieldSzone[1][0][rule][2].Pos.Y && boardy < matManager.vFieldSzone[1][0][rule][0].Pos.Y) {
+			} else if(boardy >= matManager.vFieldSzone[1][0][rule][2].Pos.Y && boardy < matManager.vFieldSzone[1][0][rule][0].Pos.Y && withinZone(matManager.vFieldSzone[1][4 - sequence][rule])) {
 				hovered_controler = 1;
 				hovered_location = LOCATION_SZONE;
 				hovered_sequence = 4 - sequence;

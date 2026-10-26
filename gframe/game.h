@@ -6,12 +6,14 @@
 #include "client_field.h"
 #include "deck_con.h"
 #include "menu_handler.h"
+#include "theme.h"
 #include <ctime>
 #include <unordered_map>
 #include <vector>
 #include <list>
 #include <mutex>
 #include <functional>
+#include <string>
 #include <irrlicht.h>
 
 #ifdef _WIN32
@@ -91,6 +93,8 @@ struct Config {
 	int hide_hint_button{ 0 };
 	int control_mode{ 0 };
 	int draw_field_spell{ 1 };
+	bool preserve_field_aspect{ true };
+	bool modern_field_view{ false };
 	int separate_clear_button{ 1 };
 	int auto_search_limit{ -1 };
 	int search_multiple_keywords{ 1 };
@@ -115,6 +119,8 @@ struct Config {
 	int resize_popup_menu{ 0 };
 	bool resize_select_window{ true };
 	bool swap_yes_no_button{ false };
+	std::string theme_id{ "classic" };
+	int mcp_port{ 8765 }; // Port preference only. Local MCP always starts disabled.
 };
 
 struct DuelInfo {
@@ -196,6 +202,7 @@ public:
 	void CheckMutual(ClientCard* pcard, int mark);
 	void DrawCards();
 	void DrawCard(ClientCard* pcard);
+	irr::core::matrix4 GetCardRenderTransform(const ClientCard* pcard) const;
 	void DrawMisc();
 	void DrawStatus(ClientCard* pcard, int x1, int y1, int x2, int y2);
 	void DrawGUI(); // called from MainLoop with gMutex held
@@ -210,6 +217,13 @@ public:
 	void DrawDeckBd();
 	void LoadConfig(const char* file);
 	void SaveConfig();
+	bool SelectTheme(const std::string& id);
+	void UpdateMcpHomeStatus();
+	void ApplyThemeMenuLayout();
+	void ApplyThemeBrowserLayout();
+	void ApplyThemeDeckCompactLayout();
+	void ApplyThemeAppearanceLayout();
+	void ApplyThemeTypography();
 	void ShowCardInfo(int code, bool resize = false);
 	void ClearCardInfo(int player = 0);
 	void AddLog(const wchar_t* msg, int param = 0);
@@ -335,6 +349,12 @@ public:
 	bool is_building{};
 	bool is_siding{};
 	bool exit_on_return{ false };
+	// Evidence collected while loading the managed update archive at startup.
+	// Only the startup transaction reporter consumes these values.
+	bool managedArchiveMounted{};
+	bool managedReleaseDatabaseLoaded{};
+	bool managedUpdateDatabaseLoaded{};
+	std::string managedProbeScript;
 	bool open_file{ false };
 	wchar_t open_file_name[256]{};
 	bool bot_mode{ false };
@@ -360,6 +380,8 @@ public:
 	//GUI
 	irr::gui::IGUIEnvironment* env{};
 	irr::gui::CGUITTFont* guiFont{};
+	irr::gui::CGUITTFont* themeGuiFont{};
+	irr::gui::CGUITTFont* themeCompactDeckFont{};
 	irr::gui::CGUITTFont* textFont{};
 	irr::gui::CGUITTFont* numFont{};
 	irr::gui::CGUITTFont* adFont{};
@@ -406,6 +428,8 @@ public:
 	irr::gui::IGUIWindow* tabSystem{};
 	irr::gui::IGUIElement* elmTabSystemLast{};
 	irr::gui::IGUIScrollBar* scrTabSystem{};
+	irr::gui::IGUIComboBox* cbTheme{};
+	ThemeManager themeManager;
 	irr::gui::IGUICheckBox* chkIgnoreDeckChanges{};
 	irr::gui::IGUICheckBox* chkAutoSearch{};
 	irr::gui::IGUICheckBox* chkMultiKeywords{};
@@ -433,8 +457,40 @@ public:
 	irr::gui::IGUIButton* btnTestMode{};
 	irr::gui::IGUIButton* btnDeckEdit{};
 	irr::gui::IGUIButton* btnModeExit{};
+	irr::gui::IGUIButton* btnMcpOpen{};
+	irr::gui::IGUIButton* btnSettingsOpen{};
+	irr::gui::IGUIStaticText* stMcpHome{};
+	irr::gui::IGUIWindow* wMcpPanel{};
+	irr::gui::IGUIButton* btnMcpClose{};
+	irr::gui::IGUIWindow* wHomeSettings{};
+	irr::gui::IGUIButton* btnSettingsClose{};
+	irr::gui::IGUIComboBox* cbHomeTheme{};
+	// Hidden until the separately reviewed data backend is integrated.
+	irr::gui::IGUIButton* btnGameDataOpen{};
+	irr::gui::IGUIWindow* wGameDataSettings{};
+	irr::gui::IGUIStaticText* stGameDataBaseStatus{};
+	irr::gui::IGUIStaticText* stUpdateProvider{};
+	irr::gui::IGUIStaticText* stUpdateStatus{};
+	irr::gui::IGUIStaticText* stUpdateDetail{};
+	irr::gui::IGUIButton* btnGameDataImport{};
+	irr::gui::IGUIButton* btnUpdateCheck{};
+	irr::gui::IGUIButton* btnUpdateDownload{};
+	irr::gui::IGUIButton* btnUpdateApply{};
+	irr::gui::IGUIButton* btnUpdateRestore{};
+	irr::gui::IGUIButton* btnUpdateCancel{};
+	irr::gui::IGUIButton* btnGameDataClose{};
+	irr::gui::IGUIEditBox* ebMcpPort{};
+	irr::gui::IGUIStaticText* stMcpLabel{};
+	irr::gui::IGUIButton* btnMcpToggle{};
+	irr::gui::IGUIButton* btnMcpCopy{};
+	irr::gui::IGUIStaticText* stMcpStatus{};
+	irr::gui::IGUIStaticText* stMcpEndpoint{};
+	std::wstring mcpStatusError;
 	//lan
 	irr::gui::IGUIWindow* wLanWindow{};
+	irr::gui::IGUIStaticText* stLanNickname{};
+	irr::gui::IGUIStaticText* stLanHostIP{};
+	irr::gui::IGUIStaticText* stLanPassword{};
 	irr::gui::IGUIEditBox* ebNickName{};
 	irr::gui::IGUIListBox* lstHostList{};
 	irr::gui::IGUIButton* btnLanRefresh{};
@@ -477,6 +533,8 @@ public:
 	irr::gui::IGUIButton* btnHostPrepCancel{};
 	//replay
 	irr::gui::IGUIWindow* wReplay{};
+	irr::gui::IGUIStaticText* stReplayHeading{};
+	irr::gui::IGUIStaticText* stReplayStartTurn{};
 	irr::gui::IGUIListBox* lstReplayList{};
 	irr::gui::IGUIStaticText* stReplayInfo{};
 	irr::gui::IGUIButton* btnLoadReplay{};
@@ -728,6 +786,20 @@ extern Game* mainGame;
 #define BUTTON_TEST_MODE			103
 #define BUTTON_DECK_EDIT			104
 #define BUTTON_MODE_EXIT			105
+#define BUTTON_MCP_TOGGLE			106
+#define BUTTON_MCP_COPY			107
+#define BUTTON_MCP_OPEN			108
+#define BUTTON_MCP_CLOSE			109
+#define BUTTON_SETTINGS_OPEN		389
+#define BUTTON_SETTINGS_CLOSE		390
+#define COMBOBOX_HOME_THEME		391
+#define BUTTON_GAME_DATA_OPEN		392
+#define BUTTON_GAME_DATA_CLOSE		393
+#define BUTTON_UPDATE_CHECK		394
+#define BUTTON_UPDATE_DOWNLOAD		395
+#define BUTTON_UPDATE_APPLY		396
+#define BUTTON_UPDATE_RESTORE		397
+#define BUTTON_UPDATE_CANCEL		398
 #define LISTBOX_LAN_HOST			110
 #define BUTTON_JOIN_HOST			111
 #define BUTTON_JOIN_CANCEL			112
@@ -914,6 +986,7 @@ extern Game* mainGame;
 #define SCROLL_RESIZE_POPUP_MENU	385
 #define CHECKBOX_RESIZE_SELECT_WINDOW	386
 #define CHECKBOX_SWAP_YES_NO_BUTTON	387
+#define COMBOBOX_THEME			388
 
 #define AVAIL_OCG					0x1
 #define AVAIL_TCG					0x2

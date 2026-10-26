@@ -55,8 +55,9 @@ project "YGOPro"
     end
 
     filter "system:windows"
-        files "ygopro.rc"
-        links { "ws2_32", "iphlpapi", "winmm", "opengl32", "imm32" }
+        files "../resource/gframe/ygopro.rc"
+        includedirs { "../resource/gframe" }
+        links { "ws2_32", "bcrypt", "iphlpapi", "winmm", "opengl32", "imm32" }
         defines { "NOMINMAX=1", "WIN32_LEAN_AND_MEAN" }
         if USE_DXSDK then
             defines { "IRR_COMPILE_WITH_DX9_DEV_PACK" }

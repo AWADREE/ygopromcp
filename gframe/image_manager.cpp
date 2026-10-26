@@ -94,11 +94,9 @@ void ImageManager::ClearTexture() {
 	tThumbLoadingMutex.unlock();
 }
 void ImageManager::ResizeTexture() {
-	irr::s32 imgWidth = CARD_IMG_WIDTH * mainGame->xScale;
-	irr::s32 imgHeight = CARD_IMG_HEIGHT * mainGame->yScale;
-	irr::s32 imgWidthThumb = CARD_THUMB_WIDTH * mainGame->xScale;
-	irr::s32 imgHeightThumb = CARD_THUMB_HEIGHT * mainGame->yScale;
 	float mul = (mainGame->xScale > mainGame->yScale) ? mainGame->yScale : mainGame->xScale;
+	irr::s32 imgWidthThumb = CARD_THUMB_WIDTH * mul;
+	irr::s32 imgHeightThumb = CARD_THUMB_HEIGHT * mul;
 	irr::s32 imgWidthFit = CARD_IMG_WIDTH * mul;
 	irr::s32 imgHeightFit = CARD_IMG_HEIGHT * mul;
 	irr::s32 bgWidth = GAME_WINDOW_WIDTH * mainGame->xScale;
@@ -106,12 +104,22 @@ void ImageManager::ResizeTexture() {
 	float btnScale = 0.5f * (mainGame->gameConf.resize_select_window ? mainGame->yScale : 1.2f);
 	irr::s32 btnImgWidth = CARD_IMG_WIDTH * btnScale;
 	irr::s32 btnImgHeight = CARD_IMG_HEIGHT * btnScale;
-	const char* coverFiles[2] = { "textures/cover.jpg", "textures/cover2.jpg" };
+	const char* coverFiles[2] = { "textures/cover.png", "textures/cover2.png" };
+	const char* legacyCoverFiles[2] = { "textures/cover.jpg", "textures/cover2.jpg" };
+	for(int i = 0; i < 2; ++i) {
+		if(!irrFileSystem->existFile(coverFiles[i]))
+			coverFiles[i] = legacyCoverFiles[i];
+	}
 	driver->removeTexture(tCover[0]);
 	if(tCover[1] != tCover[0])
 		driver->removeTexture(tCover[1]);
-	tCover[0] = GetTextureFromFile(coverFiles[0], imgWidth, imgHeight);
-	tCover[1] = GetTextureFromFile(coverFiles[1], imgWidth, imgHeight);
+	// Keep card backs at source resolution for field cards and the card inspector.
+	// Mipmaps prevent the high-resolution spiral from shimmering on small cards.
+	const bool oldMipmaps = driver->getTextureCreationFlag(irr::video::ETCF_CREATE_MIP_MAPS);
+	driver->setTextureCreationFlag(irr::video::ETCF_CREATE_MIP_MAPS, true);
+	tCover[0] = driver->getTexture(coverFiles[0]);
+	tCover[1] = driver->getTexture(coverFiles[1]);
+	driver->setTextureCreationFlag(irr::video::ETCF_CREATE_MIP_MAPS, oldMipmaps);
 	if(!tCover[1])
 		tCover[1] = tCover[0];
 	driver->removeTexture(tUnknown);
@@ -301,8 +309,9 @@ void ImageManager::LoadThumbThread() {
 		int code = imageManager.tThumbLoadingCodes.front();
 		imageManager.tThumbLoadingCodes.pop();
 		imageManager.tThumbLoadingMutex.unlock();
-		const int width = CARD_THUMB_WIDTH * mainGame->xScale;
-		const int height = CARD_THUMB_HEIGHT * mainGame->yScale;
+		const float scale = mainGame->xScale < mainGame->yScale ? mainGame->xScale : mainGame->yScale;
+		const int width = CARD_THUMB_WIDTH * scale;
+		const int height = CARD_THUMB_HEIGHT * scale;
 		irr::video::IImage* img = imageManager.GetImage(code, width, height);
 		if(img != nullptr) {
 			if(img->getDimension() == irr::core::dimension2d<irr::u32>(width, height)) {
@@ -340,8 +349,9 @@ irr::video::ITexture* ImageManager::GetTextureThumb(int code) {
 		return tUnknownThumb;
 	auto tit = tThumb.find(code);
 	if(tit == tThumb.end() && !mainGame->gameConf.use_image_load_background_thread) {
-		int width = CARD_THUMB_WIDTH * mainGame->xScale;
-		int height = CARD_THUMB_HEIGHT * mainGame->yScale;
+		const float scale = mainGame->xScale < mainGame->yScale ? mainGame->xScale : mainGame->yScale;
+		int width = CARD_THUMB_WIDTH * scale;
+		int height = CARD_THUMB_HEIGHT * scale;
 		irr::video::ITexture* texture = GetTexture(code, width, height);
 		tThumb[code] = texture;
 		return (texture == nullptr) ? tUnknownThumb : texture;

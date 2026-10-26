@@ -7,6 +7,7 @@
 #include "data_manager.h"
 #include "image_manager.h"
 #include "game.h"
+#include "field_projection.h"
 #include "materials.h"
 
 namespace ygo {
@@ -815,24 +816,31 @@ void ClientField::GetCardLocation(ClientCard* pcard, irr::core::vector3df* t, ir
 	case 0:
 	case LOCATION_HAND: {
 		int count = hand[controler].size();
+		const bool modern = mainGame->gameConf.modern_field_view;
+		const float handTilt = modern ? GetHandTilt(true) : 0.798056f;
 		if (controler == 0) {
-			if (count <= 6)
+			if(modern) {
+				if(count <= 6)
+					t->X = 4.2f + (sequence - (count - 1) * 0.5f) * MODERN_HAND_PITCH;
+				else
+					t->X = 4.2f - 2.375f + sequence * 4.75f / (count - 1);
+			} else if(count <= 6)
 				t->X = (5.5f - 0.8f * count) / 2 + 1.55f + sequence * 0.8f;
 			else
 				t->X = 1.9f + sequence * 4.0f / (count - 1);
 			if (pcard->is_hovered) {
-				t->Y = 3.84f;
-				t->Z = 0.656f + 0.001f * sequence;
+				t->Y = modern ? MODERN_HAND_Y : 3.84f;
+				t->Z = (modern ? 0.5f : 0.656f) + 0.001f * sequence;
 			} else {
-				t->Y = 4.0f;
+				t->Y = modern ? MODERN_HAND_Y : 4.0f;
 				t->Z = 0.5f + 0.001f * sequence;
 			}
 			if(pcard->code) {
-				r->X = -0.798056f;
+				r->X = -handTilt;
 				r->Y = 0.0f;
 				r->Z = 0.0f;
 			} else {
-				r->X = 0.798056f;
+				r->X = handTilt;
 				r->Y = 3.1415926f;
 				r->Z = 0;
 			}
@@ -849,11 +857,11 @@ void ClientField::GetCardLocation(ClientCard* pcard, irr::core::vector3df* t, ir
 				t->Z = 0.5f - 0.001f * sequence;
 			}
 			if (pcard->code == 0) {
-				r->X = 0.798056f;
+				r->X = handTilt;
 				r->Y = 3.1415926f;
 				r->Z = 0;
 			} else {
-				r->X = -0.798056f;
+				r->X = -handTilt;
 				r->Y = 0;
 				r->Z = 0;
 			}
