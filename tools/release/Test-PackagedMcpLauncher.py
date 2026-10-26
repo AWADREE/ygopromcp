@@ -1,9 +1,9 @@
 """Private end-to-end MCP batch-launcher check with owned GUI shutdown.
 
-The caller supplies a *copy* of the package with compatible private game
-data. This test never joins a room. It finds only the YGOPro.exe child of the
-cmd.exe process it started, verifies that child's absolute executable path,
-and posts WM_CLOSE to that child's own window after stdin EOF. It does not
+The caller supplies a *copy* of the package with compatible game data.
+This test never joins a room. It verifies the cmd.exe -> native launcher ->
+YGOPro.exe process chain by absolute executable path, and posts WM_CLOSE to
+the game's own window after stdin EOF. It does not
 capture the desktop or send game input.
 """
 
@@ -60,7 +60,7 @@ def owned_child(parent_pid: int, expected_exe: Path) -> int | None:
         entry.dwSize = ctypes.sizeof(entry)
         more = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
         while more:
-            if entry.th32ParentProcessID == parent_pid and entry.szExeFile.lower() == "ygopro.exe":
+            if entry.th32ParentProcessID == parent_pid and entry.szExeFile.lower() == expected_exe.name.lower():
                 handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, entry.th32ProcessID)
                 if not handle:
                     raise OSError(ctypes.get_last_error(), "Cannot verify owned child path")
@@ -114,8 +114,9 @@ def main() -> None:
         raise RuntimeError("Windows only")
     runtime = Path(sys.argv[1]).resolve()
     exe = (runtime / "YGOPro.exe").resolve()
+    native_launcher = (runtime / "YGOProUpdateLauncher.exe").resolve()
     launcher = runtime / "MCP YGOPro.cmd"
-    assert exe.is_file() and launcher.is_file()
+    assert exe.is_file() and native_launcher.is_file() and launcher.is_file()
     env = os.environ.copy()
     env["PATH"] = os.pathsep.join([os.environ["SystemRoot"] + r"\System32", os.environ["SystemRoot"]])
     proc = subprocess.Popen(
@@ -125,6 +126,7 @@ def main() -> None:
     )
     lines: queue.Queue[bytes] = queue.Queue()
     threading.Thread(target=lambda: [lines.put(line) for line in proc.stdout], daemon=True).start()
+    launcher_pid = None
     child_pid = None
     try:
         for number, method in ((1, "initialize"), (2, "tools/list")):
@@ -141,21 +143,23 @@ def main() -> None:
                 assert {"ygo_connect", "ygo_choose", "ygo_disconnect"} <= names
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline and child_pid is None:
-            child_pid = owned_child(proc.pid, exe)
+            launcher_pid = owned_child(proc.pid, native_launcher)
+            if launcher_pid is not None:
+                child_pid = owned_child(launcher_pid, exe)
             if child_pid is None:
                 time.sleep(0.05)
-        assert child_pid is not None, "No verified game child of this launcher"
+        assert launcher_pid is not None and child_pid is not None, "No verified native-launcher/game process chain"
         proc.stdin.close()
         time.sleep(0.2)
         assert proc.poll() is None, "GUI exited on MCP stdin EOF"
         close_owned_window(child_pid)
         assert proc.wait(timeout=10) == 0, "Launcher or game did not shut down cleanly"
         assert lines.empty(), "Unexpected nonprotocol stdout"
-        print(f"PASS: actual MCP launcher, initialize, tools/list ({len(names)} tools), EOF survival, owned GUI close, exit 0")
+        print(f"PASS: actual MCP wrapper and native launcher, initialize, tools/list ({len(names)} tools), EOF survival, owned GUI close, exit 0")
     finally:
         if proc.poll() is None:
-            if child_pid is not None:
-                terminate_verified_child(child_pid, exe, proc.pid)
+            if child_pid is not None and launcher_pid is not None:
+                terminate_verified_child(child_pid, exe, launcher_pid)
             proc.kill()
             proc.wait(timeout=5)
         if not proc.stdin.closed:

@@ -11,12 +11,16 @@ A compatible card-data set is separate:
   strings.conf
   script\constant.lua and the matching card effect scripts
 
-Use the release's reviewed first-run setup when available. Otherwise, supply
-compatible, lawfully obtained card data from your own installation. Keep
-personal deck\, replay\, expansions\, and system.conf in your own runtime.
-Do not silently substitute an unrelated database or set of card scripts.
+Double-click "Play YGOPro.cmd". On a clean first run, the native launcher
+offers to download the pinned compatible card database and scripts. It checks
+their hashes before installation and leaves existing personal data untouched.
+Canceling leaves the folder ready for another attempt. Existing unverified
+game data requires an explicit choice and is never overwritten automatically.
+Card artwork is separate and is not downloaded by this setup.
 
-Double-click "Play YGOPro.cmd" to play. For an MCP stdio client, configure
-"MCP YGOPro.cmd" as the command with this directory as its working directory.
+After first-run setup, use "MCP YGOPro.cmd" as an MCP stdio client's command,
+with this directory as its working directory. That command passes --mcp to
+the native launcher and reserves stdout for JSON-RPC. The optional in-game
+localhost HTTP MCP control is configured separately on the home screen.
 One MCP client owns one process. See MANIFEST.json for exact package hashes,
 source revision, and the pinned original fallback asset manifest.
