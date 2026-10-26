@@ -2584,6 +2584,47 @@ static bool MCP_DeckRead(const std::wstring& path, Deck& deck) {
     return DeckManager::LoadDeckFromStream(deck, input) == 0;
 }
 
+static std::string MCP_DoDeckOpen(const json& args);
+
+static std::string MCP_DoDeckCreate(const json& args) {
+    std::string error = MCP_DeckEditor();
+    if (!error.empty()) return error;
+    if (mainGame->deckBuilder.is_modified)
+        return "Error: current deck has unsaved edits; save it in the editor first";
+    std::string name;
+    if (!MCP_DeckString(args, "name", name))
+        return "Error: name must be a nonempty local deck name";
+    const std::wstring wide = BufferIO::DecodeUTF8String(name);
+    if (!MCP_DeckLeaf(wide) || U8(wide.c_str()) != name)
+        return "Error: name must be a valid single deck filename";
+    std::wstring directory;
+    if (!MCP_DeckCategoryPath(DECK_CATEGORY_NONE, directory))
+        return "Error: deck is not an ordinary local directory";
+    const std::wstring path = directory + L"/" + wide + L".ydk";
+    if (path.size() > 210)
+        return "Error: deck filename is too long";
+
+    // Exclusive creation avoids replacing an existing deck (including a
+    // reparse point). The validated path has one leaf below ordinary ./deck.
+    FILE* file = DeckManager::OpenDeckFile(path.c_str(), "wbx");
+    if (!file) return "Error: deck already exists or cannot be created";
+    Deck empty;
+    std::stringstream output;
+    DeckManager::SaveDeck(empty, output);
+    const std::string bytes = output.str();
+    bool written = std::fwrite(bytes.data(), 1, bytes.size(), file) == bytes.size();
+    if (std::fflush(file) != 0) written = false;
+    if (std::fclose(file) != 0) written = false;
+    if (!written) {
+        FileSystem::RemoveFile(path.c_str());
+        return "Error: could not write new deck";
+    }
+    const std::string opened = MCP_DoDeckOpen({{"deck", name}});
+    if (opened.rfind("Error:", 0) == 0)
+        return "Error: deck was created but could not open; list and open it";
+    return opened;
+}
+
 static std::string MCP_DoDeckOpen(const json& args) {
     std::string error = MCP_DeckEditor();
     if (!error.empty()) return error;
@@ -2644,6 +2685,35 @@ static std::string MCP_DoDeckOpen(const json& args) {
     mainGame->ebDeckname->setText(L"");
     builder.GetHoveredCard();
     return MCP_DeckState();
+}
+
+static std::string MCP_DoGuide(const json& args) {
+    if (!args.is_object()) return "Error: arguments must be an object";
+    if (args.contains("topic") && !args["topic"].is_string())
+        return "Error: topic must be overview, decks, duel, or limits";
+    const std::string topic = args.value("topic", "overview");
+    if (topic == "overview")
+        return "YGOPROMCP controls this visible game client only. Read ygo_guide topics decks, duel, and limits as needed. "
+               "For a new deck, create a unique local name, search and add cards, then save. "
+               "For a duel, use a separate human client to host a localhost room; join with ygo_connect and your saved deck. "
+               "Use the IDs in the latest prompt with ygo_choose. Never infer hidden opponent cards.";
+    if (topic == "decks")
+        return "Open the graphical deck editor with ygo_deck_list. ygo_deck_create makes a new empty ./deck/<name>.ydk "
+               "without overwriting any existing deck. Use ygo_deck_search to find card codes, ygo_deck_add or "
+               "ygo_deck_remove for main/extra/side, and ygo_deck_save before joining. The game's normal card "
+               "limits and deck validity still apply. Existing unsaved edits must be saved first.";
+    if (topic == "duel")
+        return "Have the human open a separate client and host a private localhost room. In this attached client, "
+               "call ygo_connect with host 127.0.0.1, the room port/password, and a saved local deck path. "
+               "At each decision, read the returned public state and option IDs, then call ygo_choose with the "
+               "current option ID(s). It is an action, not a polling tool. ygo_disconnect leaves the room.";
+    if (topic == "limits")
+        return "This MCP server belongs to one visible client and cannot launch, close, or manage other clients. "
+               "It cannot access the human opponent's hidden information. The game room port differs from the "
+               "MCP HTTP port. Enabling HTTP MCP creates a session URL for this client; disabling it revokes that "
+               "URL. A chat must support and authorize an HTTP MCP connection; pasting a URL as text alone does "
+               "not grant tools.";
+    return "Error: topic must be overview, decks, duel, or limits";
 }
 
 static std::string MCP_DoDeckSearch(const json& args) {
@@ -2806,7 +2876,12 @@ static std::string MCP_Execute(MCPJob* job) {
         // tools capability must be advertised or listTools() returns empty.
         job->result = {{"protocolVersion", job->http ? "2025-11-25" : "2024-11-05"},
                        {"capabilities", {{"tools", json::object()}}},
-                       {"serverInfo", {{"name", "ygopro-mcp"}, {"version", "1.0.0"}}}};
+                       {"serverInfo", {{"name", "ygopro-mcp"}, {"version", "1.1.0"}}},
+                       {"instructions", "This MCP controls the visible YGOPro client, not other processes. "
+                                        "Call ygo_guide for built-in deck, duel, and limits guidance. "
+                                        "Create a local deck with ygo_deck_create, search/add cards, save, then "
+                                        "join a separate human-hosted private room with ygo_connect. "
+                                        "Use current prompt option IDs with ygo_choose. Never infer hidden cards."}};
         return "";
     }
     if (job->method == "ping") {
@@ -2818,6 +2893,7 @@ static std::string MCP_Execute(MCPJob* job) {
         json props;
         props["id"] = {{"type", "integer"}, {"description", "an option id (int) or a list of option ids (subset); ids always start at 0"}};
         json tools = json::array();
+        tools.push_back(ToolSchema("ygo_guide", "Read bundled YGOPro MCP instructions for overview, decks, duel, or limits; no game state changes", {{"topic", {{"type", "string"}, {"enum", {"overview", "decks", "duel", "limits"}}, {"description", "optional; defaults to overview"}}}}));
         tools.push_back(ToolSchema("ygo_connect", "Connect to a room and block until the first decision point (RPS/turn order/prompt) or a failure. Joins, uploads the deck, readies, and polls the start button (if host) automatically.", {{"host", {{"type", "string"}}}, {"port", {{"type", "string"}}}, {"password", {{"type", "string"}}}, {"name", {{"type", "string"}, {"description", "nickname (optional)"}}}, {"deck", {{"type", "string"}, {"description", "deck file path"}}}}));
         tools.push_back(ToolSchema("ygo_choose", "Answer the pending prompt and block until the next decision point. id = int (single option) or list of ints (subset), per the '# options: min~max/total' section. Prompts with exactly one way to answer are auto-answered and never reach you.", props));
         tools.push_back(ToolSchema("ygo_card", "Explain a card on one line (ydkshow-style): name or code", {{"name", {{"type", "string"}, {"description", "card name (substring) or numeric code"}}}}));
@@ -2825,6 +2901,7 @@ static std::string MCP_Execute(MCPJob* job) {
         tools.push_back(ToolSchema("ygo_surrender", "Surrender the duel; blocks until the server responds (side exchange / win-lose)", json::object()));
         tools.push_back(ToolSchema("ygo_disconnect", "Leave the room; returns after the connection closes and the graphical client returns to its room browser", json::object()));
         tools.push_back(ToolSchema("ygo_deck_list", "Show listed local decks and the current graphical editor deck", json::object()));
+        tools.push_back(ToolSchema("ygo_deck_create", "Create a new empty deck with a unique filename in the local deck directory and select it; never overwrites", {{"name", {{"type", "string"}, {"description", "new single filename stem, without .ydk or path separators"}}}}));
         tools.push_back(ToolSchema("ygo_deck_open", "Load a listed local deck in the graphical editor; refuses to discard unsaved edits", {{"deck", {{"type", "string"}}}, {"category", {{"type", "string"}, {"description", "local or a listed category; defaults to local"}}}}));
         tools.push_back(ToolSchema("ygo_deck_search", "Search cards with the graphical editor's normal filter", {{"query", {{"type", "string"}}}}));
         tools.push_back(ToolSchema("ygo_deck_add", "Add copies to the selected local deck, subject to editor section and card limits", {{"code", {{"type", "integer"}}}, {"section", {{"type", "string"}, {"enum", {"main", "extra", "side"}}}}, {"count", {{"type", "integer"}, {"description", "1 to 3; defaults to 1"}}}}));
@@ -2838,13 +2915,15 @@ static std::string MCP_Execute(MCPJob* job) {
         std::string name = job->params.value("name", "");
         json args = job->params.contains("arguments") ? job->params["arguments"] : json::object();
         std::string text;
-        if (name == "ygo_connect") text = MCP_DoConnect(args);
+        if (name == "ygo_guide") text = MCP_DoGuide(args);
+        else if (name == "ygo_connect") text = MCP_DoConnect(args);
         else if (name == "ygo_choose") text = MCP_DoChoose(args);
         else if (name == "ygo_card") text = MCP_DoCard(args);
         else if (name == "ygo_chat") text = MCP_DoChat(args);
         else if (name == "ygo_surrender") text = MCP_DoSurrender();
         else if (name == "ygo_disconnect") text = MCP_DoDisconnect();
         else if (name == "ygo_deck_list") text = MCP_DoDeckList();
+        else if (name == "ygo_deck_create") text = MCP_DoDeckCreate(args);
         else if (name == "ygo_deck_open") text = MCP_DoDeckOpen(args);
         else if (name == "ygo_deck_search") text = MCP_DoDeckSearch(args);
         else if (name == "ygo_deck_add") text = MCP_DoDeckEdit(args, true);
@@ -3060,7 +3139,8 @@ void MCP_Poll() {
             // immediate response = the same text block as every tool.
             if (job->method == "tools/call") {
                 std::string name = job->params.value("name", "");
-                MCP_CompleteJob(job.get(), name.rfind("ygo_deck_", 0) == 0 ? text : MCP_BlockText());
+                MCP_CompleteJob(job.get(), (name == "ygo_guide" || name.rfind("ygo_deck_", 0) == 0)
+                    ? text : MCP_BlockText());
             }
             else
                 MCP_FinishJob(job.get());

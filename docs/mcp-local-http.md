@@ -8,8 +8,11 @@ the game as a subprocess; its protocol version remains 2024-11-05.
 1. Start the game normally and choose **Local MCP** on the home screen.
 2. Enter an unused local port (the default is 8765) and select **Enable MCP**.
 3. After the status says **Listening on this PC**, select **Copy connection URL**.
-   Paste that complete URL into a native MCP client that supports Streamable
-   HTTP. The client should use POST with `application/json` and advertise both
+   Register that complete URL as a Streamable HTTP MCP server in the chat
+   client's MCP settings, then open a fresh chat and confirm that `ygo_guide`
+   appears in its tools. Pasting the URL into chat text alone does not register
+   a server or grant tool access. The client should use POST with
+   `application/json` and advertise both
    `application/json` and `text/event-stream` in `Accept`.
 4. Select **Disable MCP** to close the listener. The port is released, and the
    old URL stops working. Enabling again produces a new URL.
@@ -25,6 +28,16 @@ It listens only on `127.0.0.1`, rejects browser `Origin` headers, and does not
 accept LAN connections. It is separate from the game's room port (17924).
 There is no separate MCP server to start when using this home-screen control.
 The UI reports a bind error if another process already owns the chosen port.
+
+The server's initialize response includes concise use instructions, and
+`ygo_guide` supplies read-only overview, decks, duel, and limits topics. An
+agent can create an empty deck through `ygo_deck_create`, search/add cards in
+the visible deck editor, and save it without a shell or manual deck file. The
+agent can then join a private room hosted by a separate human game client.
+The server controls only the game process that exposes the URL; it cannot
+launch or close other clients, run research clients over time, or see hidden
+opponent cards. A new URL after each enable must be registered again by the
+MCP client. These limits are reported by `ygo_guide` as well.
 
 Theme selection is under **Settings** on the home screen and under the game's
 existing System settings tab. Switching back to Classic restores the Classic

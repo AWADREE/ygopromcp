@@ -146,12 +146,47 @@ def run(exe, assets, scratch_dir, dll_dir):
             print(f"PASS rejected {name}: {reason}", flush=True)
 
         try:
+            proc.stdin.write((json.dumps({"jsonrpc": "2.0", "id": "init",
+                "method": "initialize", "params": {"protocolVersion": "2024-11-05",
+                "capabilities": {}, "clientInfo": {"name": "deck-smoke", "version": "1"}}}) + "\n").encode())
+            proc.stdin.flush()
+            initialized = json.loads(lines.get(timeout=15))
+            assert initialized["id"] == "init"
+            assert "ygo_guide" in initialized["result"]["instructions"]
+            proc.stdin.write((json.dumps({"jsonrpc": "2.0", "id": "list",
+                "method": "tools/list", "params": {}}) + "\n").encode())
+            proc.stdin.flush()
+            tool_list = json.loads(lines.get(timeout=15))
+            names = {item["name"] for item in tool_list["result"]["tools"]}
+            assert {"ygo_guide", "ygo_deck_create", "ygo_deck_save"}.issubset(names)
+            assert "cannot launch" in call("ygo_guide", {"topic": "limits"})
+            rejected("ygo_guide", {"topic": 17}, "topic")
+            print("PASS bundled initialize guidance, guide topics and tool discovery", flush=True)
+
             listed = call("ygo_deck_list")
             local = listed.split("local:", 1)[1].splitlines()[0]
             assert {"alpha", "beta", "invalid"}.issubset(set(local.split())), listed
             assert "custom: gamma" in listed, listed
             assert "# deck editor" in listed, listed
             print("PASS graphical editor entered and local decks listed", flush=True)
+
+            created = call("ygo_deck_create", {"name": "agent"})
+            agent = runtime / "deck" / "agent.ydk"
+            assert "deck: agent" in created and "main (0)" in created and agent.is_file(), created
+            empty_bytes = agent.read_bytes()
+            rejected("ygo_deck_create", {"name": "agent"}, "already exists")
+            rejected("ygo_deck_create", {"name": "../escape"}, "single deck")
+            rejected("ygo_deck_create", {"name": "custom/escape"}, "single deck")
+            rejected("ygo_deck_create", {"name": "alpha"}, "already exists")
+            assert agent.read_bytes() == empty_bytes and alpha.read_bytes() == alpha_original
+            changed = call("ygo_deck_add", {"code": 102, "section": "main"})
+            assert "modified: yes" in changed and agent.read_bytes() == empty_bytes
+            rejected("ygo_deck_create", {"name": "another"}, "unsaved")
+            assert not (runtime / "deck" / "another.ydk").exists()
+            saved = call("ygo_deck_save")
+            assert "modified: no" in saved and b"102" in agent.read_bytes()
+            assert "deck: agent" in call("ygo_deck_open", {"deck": "agent"})
+            print("PASS MCP-only create, edit, save, reopen and no-overwrite bounds", flush=True)
 
             state = call("ygo_deck_open", {"category": "custom", "deck": "gamma"})
             assert "category: custom" in state and "deck: gamma" in state, state
