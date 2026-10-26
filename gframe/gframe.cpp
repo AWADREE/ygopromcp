@@ -144,9 +144,9 @@ static int mymain(int wargc, const wchar_t* const wargv[]) {
 	evthread_use_pthreads();
 	signal(SIGCHLD, SIG_IGN);
 #endif //_WIN32
-	// The MCP bridge owns stdout from the very start (before Initialize
-	// prints the irrlicht banner), so the JSON-RPC channel never sees app
-	// output. Always on; no flags.
+	// Start the GUI-thread MCP bridge before initialization. Stdio captures
+	// stdout when available; a GUI launch without pipes can still enable the
+	// separate localhost HTTP listener from the home screen.
 	ygo::MCP_Init();
 
 	ygo::Game _game;

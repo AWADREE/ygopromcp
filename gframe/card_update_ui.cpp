@@ -274,6 +274,7 @@ void Start(Game& game, CardUpdateAction action, const std::string& revision = {}
 	if(action == CardUpdateAction::Schedule) label = L"Scheduling for restart...";
 	if(action == CardUpdateAction::Rollback) label = L"Preparing restore for restart...";
 	game.stUpdateStatus->setText(label);
+	game.stUpdateDetail->setText(L"");
 	Controls(game);
 	state.worker = std::thread([action, revision] {
 		Result result = RunBackend(action, revision, state.cancel);
@@ -369,6 +370,9 @@ void CardUpdateUiPoll(Game& game) {
 		Controls(game);
 		return;
 	}
+	// Every completed response owns the detail line. Do not retain an older
+	// restart instruction after Cancel refreshes to not-checked.
+	game.stUpdateDetail->setText(L"");
 	if(state.action == CardUpdateAction::Status || state.action == CardUpdateAction::Check) {
 		state.compatible = response.contains("core") && response["core"].is_object() &&
 			response["core"].contains("compatible") && response["core"]["compatible"].is_boolean() &&
@@ -443,6 +447,10 @@ void CardUpdateUiPoll(Game& game) {
 	if(phase == "ready-to-apply") label = L"Verified download ready to apply";
 	if(phase == "candidate") label = L"Compatible prerelease update found";
 	if(phase == "incompatible") label = L"This build is not compatible with updates";
+	if(phase == "not-checked") {
+		label = L"No update scheduled";
+		game.stUpdateDetail->setText(L"No card-data update will apply on the next launch.");
+	}
 	if(phase == "external-change") {
 		label = L"Active card data changed outside updates";
 		game.stUpdateDetail->setText(L"No files were changed. Preserve the package and restore a verified installation before retrying.");

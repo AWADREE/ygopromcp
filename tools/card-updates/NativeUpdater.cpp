@@ -38,7 +38,7 @@ const char* BASE_DB_COMMIT = "ad8b039dfcef7395007932e01cf86e23aa73f0fd";
 const char* BASE_NUM_FONT_SHA256 = "b5f0d1a190a7f9b43c310a8850630af12553df32c4c050543f9059732d9b4c0a";
 const char* BASE_TEXT_FONT_SHA256 = "2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b";
 // Refresh this after the final, separately tested full-audio game build.
-const char* TESTED_GAME_SHA256 = "c8b244c5cad2fa00eeda8c82001cc22aeb4d24e1cd6db40a11a4f4051b78784a";
+const char* TESTED_GAME_SHA256 = "a6688693e9fe392bcb79e0f74bda07664b00305b812dd4c0b2c2b6f8cbf76631";
 
 void Fail(const std::string& message) { throw std::runtime_error(message); }
 bool Hex(const std::string& value, size_t size) {

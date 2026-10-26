@@ -2869,12 +2869,14 @@ static std::string MCP_Execute(MCPJob* job) {
 
 void MCP_Init() {
     if (g_running) return;
-    // The MCP channel owns the real stdout; the app's own output goes to stderr.
+    // The GUI-thread bridge serves both transports. A normal GUI launch may
+    // have no usable stdio handles; that must not disable opt-in localhost MCP.
+    g_running = true;
+    // When available, stdio owns the real stdout and sends app output to stderr.
     if (!g_stdio.Start()) return;
 #ifndef _WIN32
     std::signal(SIGPIPE, SIG_IGN);
 #endif
-    g_running = true;
     dbg("init: starting reader thread");
 #ifdef _WIN32
     std::promise<HANDLE> reader_ready;
@@ -2889,7 +2891,6 @@ void MCP_Init() {
     });
     g_reader_handle = reader_handle.get();
     if (!g_reader_handle) {
-        g_running = false;
         g_thread.join();
         g_stdio.Stop();
     }

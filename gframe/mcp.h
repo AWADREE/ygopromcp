@@ -18,10 +18,10 @@
 // See mcp.cpp for the threading contract and the learned caveats.
 namespace ygo {
 
-// Called once at startup, always on (no --mcp flag), BEFORE Game::Initialize
-// (the bridge must own stdout from the very start so the JSON-RPC channel
-// never sees app output -- see gframe.cpp). Redirects the app's stdout to
-// stderr and starts the stdin reader thread.
+// Called once at startup, before Game::Initialize. The GUI-thread request
+// bridge is available even if this GUI launch has no usable stdio handles.
+// When stdio is available, it owns stdout before initialization can print
+// and starts the stdin reader thread.
 void MCP_Init();
 
 // Called after MainLoop returns or initialization fails. Stops the reader
