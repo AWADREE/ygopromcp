@@ -176,7 +176,7 @@ Copy-Pinned $BuildReceipt 'build/build-receipt.json' 'observed executable/source
 
 $manifest = [ordered]@{
     schema_version = 1
-    status = 'draft-source-for-observed-audio-probe; not final integrated release'
+    status = 'candidate-corresponding-source; independent artifact review pending'
     client_commit = $ClientCommit
     public_base_commit = $PublicBaseCommit
     executable_sha256 = $receipt.executable_sha256.ToLowerInvariant()
@@ -189,13 +189,13 @@ $manifest = [ordered]@{
     ucrt64_package_count = 18
     ucrt64_notice_package_count = $ucrtNotices.Count
     files = @($files)
-    limitations = @('The observed executable embeds an ignored private icon/resource absent from this source bundle.',
-        'A final binary requires approved original resource input and a new exact build/source bundle.',
+    limitations = @('The approved original Windows icon is tracked in the client source archive.',
+        'Source and binary publication require final package tests and independent review.',
         'The client archive contains Gitlinks; only build-used ocgcore and modified Irrlicht submodule sources are separately included.',
         'Local card databases, images, scripts, decks, settings, replays and private logs are excluded.')
 }
 $manifestPath = Join-Path $out 'SOURCE-MANIFEST.json'
 [IO.File]::WriteAllText($manifestPath, (($manifest | ConvertTo-Json -Depth 12) + "`n"), [Text.UTF8Encoding]::new($false))
 [IO.Compression.ZipFile]::CreateFromDirectory($out, $zip, [IO.Compression.CompressionLevel]::NoCompression, $false)
-Write-Output "DRAFT source bundle: $zip"
+Write-Output "Candidate source bundle: $zip"
 Write-Output "Files: $($files.Count); bundle SHA256: $((Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash)"
