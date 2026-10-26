@@ -272,7 +272,7 @@ bool Game::Initialize() {
 	env->addStaticText(L"Base game data", irr::core::rect<irr::s32>(22, 35, 530, 59),
 		false, false, wGameDataSettings);
 	stGameDataBaseStatus = env->addStaticText(L"Base data loaded at startup. The launcher handles first-run setup and recovery.",
-		irr::core::rect<irr::s32>(22, 66, 530, 101), false, true, wGameDataSettings);
+		irr::core::rect<irr::s32>(22, 66, 530, 125), false, true, wGameDataSettings);
 	btnGameDataImport = env->addButton(irr::core::rect<irr::s32>(22, 108, 234, 145),
 		wGameDataSettings, -1, L"Import existing data");
 	btnGameDataImport->setVisible(false);
