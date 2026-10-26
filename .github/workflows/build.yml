@@ -589,6 +589,7 @@ jobs:
         name:
           - macos-15-intel
           - macos-26-arm
+          - macos-15-arm
           - macos-26-intel-cross-compile-static-link
           - macos-26-arm-static-link
         include:
@@ -596,6 +597,9 @@ jobs:
             os: macos-15-intel
           - name: macos-26-arm
             os: macos-26
+          # Supplemental Arm compatibility coverage; macOS 26 Arm remains required.
+          - name: macos-15-arm
+            os: macos-15
           - name: macos-26-intel-cross-compile-static-link
             os: macos-26
             cross-build-intel: true

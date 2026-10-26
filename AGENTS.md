@@ -5,6 +5,21 @@ This is the `ygopromcp` graphical client plus an MCP stdio bridge. Read
 [docs/mcp-design.md](docs/mcp-design.md) for historical protocol design.
 Implementation and `tools/list` win when design prose differs.
 
+## GitHub change workflow
+
+- Make every repository change on a branch and open a pull request. Do not
+  push changes directly to `main`.
+- Run every applicable GitHub Actions build and test pipeline for the pull
+  request's latest head before merging. Queued, cancelled, and failed jobs
+  do not count as passes.
+- Merge into `main` only after all applicable pipeline jobs have completed
+  successfully at that exact head.
+- Preserve every supported OS, architecture, link mode, and test case when
+  fixing CI. Coverage may grow, but do not remove or replace an existing
+  check to obtain a green result. Diagnose source failures in code and
+  runner acquisition failures as infrastructure; a queued or cancelled
+  required job remains unresolved until it actually runs and passes.
+
 ## Work boundaries
 
 - Preserve the visible YGOPro client, event receivers, deck-editor rules,
