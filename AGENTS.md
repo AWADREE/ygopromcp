@@ -14,6 +14,11 @@ Implementation and `tools/list` win when design prose differs.
   do not count as passes.
 - Merge into `main` only after all applicable pipeline jobs have completed
   successfully at that exact head.
+- Preserve every supported OS, architecture, link mode, and test case when
+  fixing CI. Coverage may grow, but do not remove or replace an existing
+  check to obtain a green result. Diagnose source failures in code and
+  runner acquisition failures as infrastructure; a queued or cancelled
+  required job remains unresolved until it actually runs and passes.
 
 ## Work boundaries
 
