@@ -8,7 +8,6 @@ project "sqlite"
         "SQLITE_MAX_EXPR_DEPTH=0",
         "SQLITE_OMIT_DECLTYPE",
         "SQLITE_OMIT_DEPRECATED",
-        "SQLITE_OMIT_PROGRESS_CALLBACK",
         "SQLITE_OMIT_SHARED_CACHE",
         "SQLITE_TRUSTED_SCHEMA=0",
     }
