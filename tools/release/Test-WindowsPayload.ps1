@@ -71,6 +71,16 @@ foreach ($name in @('themes/gilded/theme.json','themes/gilded/assets/backdrop.pn
 foreach ($name in @('YGOPro.exe','YGOProUpdateLauncher.exe')) {
     if (-not $expected.ContainsKey($name)) { throw "Executable omitted from manifest: $name" }
 }
+if (-not $expected.ContainsKey('build-info.json')) { throw 'Build compatibility manifest omitted from package.' }
+$buildInfo = Get-Content -LiteralPath (Join-Path $dir 'build-info.json') -Raw | ConvertFrom-Json
+if ($buildInfo.schema_version -ne 1 -or
+    $buildInfo.source_commit -ne $manifest.source_commit -or
+    $buildInfo.exe_sha256 -ne $manifest.executable_sha256 -or
+    $buildInfo.core_commit -ne '3209cd866a55e8501a0ed358d3064d9ae0ae6b30' -or
+    $buildInfo.base_script_commit -ne 'cfbb14cdbf7b2095db543f2620eb2e88b0fb9220' -or
+    $null -ne $buildInfo.fixture_only) {
+    throw 'Build compatibility manifest differs from the reviewed executable and source pins.'
+}
 $helperNames = @()
 $helperEntries = if ($null -eq $manifest.native_helpers) { @() } else { @($manifest.native_helpers) }
 foreach ($helper in $helperEntries) {

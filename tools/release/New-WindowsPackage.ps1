@@ -42,6 +42,15 @@ if ($LASTEXITCODE -ne 0 -or -not $headOutput) { throw 'Cannot resolve source com
 $head = $headOutput.Trim()
 if ($head -ne $receipt.source_commit) { throw 'Build receipt source commit differs from checkout.' }
 if ((& git -C $source status --porcelain --untracked-files=no)) { throw 'Tracked source changes remain uncommitted.' }
+$corePin = '3209cd866a55e8501a0ed358d3064d9ae0ae6b30'
+$scriptPin = 'cfbb14cdbf7b2095db543f2620eb2e88b0fb9220'
+foreach ($pair in @(@('ocgcore',$corePin),@('script',$scriptPin))) {
+    $line = @(& git -C $source ls-tree $head -- $pair[0])
+    if ($LASTEXITCODE -ne 0 -or $line.Count -ne 1 -or
+        $line[0] -notmatch "^160000 commit $($pair[1])\s+$($pair[0])$") {
+        throw "Unreviewed game-data source pin: $($pair[0])"
+    }
+}
 $exeHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $exe).Hash
 if ($exeHash -ne $receipt.executable_sha256 -or (Get-Item -LiteralPath $exe).Length -ne $receipt.executable_size) {
     throw 'Executable does not match build receipt.'
@@ -212,6 +221,15 @@ foreach ($name in @('Play YGOPro.cmd','MCP YGOPro.cmd','Check game data.cmd','GA
     Copy-Item -LiteralPath (Join-Path $toolRoot $name) -Destination (Join-Path $output $name)
 }
 Copy-Item -LiteralPath (Join-Path $source 'LICENSE') -Destination (Join-Path $output 'LICENSE')
+$buildInfo = [ordered]@{
+    schema_version = 1
+    source_commit = $head
+    exe_sha256 = $exeHash.ToLowerInvariant()
+    core_commit = $corePin
+    base_script_commit = $scriptPin
+}
+[IO.File]::WriteAllText((Join-Path $output 'build-info.json'),
+    (($buildInfo | ConvertTo-Json -Depth 4) + "`n"), [Text.UTF8Encoding]::new($false))
 New-Item -ItemType Directory -Path (Join-Path $output 'themes') | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $output 'themes\gilded\assets') -Force | Out-Null
 foreach ($relative in $themeAllowed) {
