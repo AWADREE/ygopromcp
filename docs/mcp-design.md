@@ -1,3 +1,7 @@
+> Historical design note: this describes the earlier always-on stdio bridge.
+> The current Windows package uses `MCP YGOPro.cmd` or the native launcher
+> with `--mcp`; see [local MCP setup](mcp-local-http.md).
+
 # ygopromcp — MCP bridge design (v4)
 
 The gframe (ygopro) client carries a JSON-RPC 2.0 MCP bridge on stdio. The

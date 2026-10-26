@@ -29,7 +29,8 @@ Release preparation uses the scripts under `tools/release/`:
 
 `MANIFEST.json` records the source revision, executable and DLL hashes,
 licenses, audio profile and asset inventory. The release tools do not publish
-or upload a package. A final full-audio package and icon review are pending;
+or upload a package. The reviewed full-audio Windows candidate includes the
+approved app icon;
 this document is a build procedure, not a release announcement. The theme
 package format is in [theme packages](theme-packages.md), and MCP connection
 details are in [local MCP setup](mcp-local-http.md).

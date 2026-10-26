@@ -21,7 +21,8 @@ launcher starts the client; stdio MCP remains available through its `--mcp`
 mode. Localhost HTTP MCP is optional and enabled inside the game. See
 [local MCP setup](docs/mcp-local-http.md) for transport and security details.
 A game room uses a separate network port. These features have bounded local
-tests; a final public package and full-audio validation are still pending.
+tests. The reviewed Windows x64 package was built with full audio support and
+exercised in isolated local runs; audible playback itself was not verified.
 
 ## Get a working local client
 
@@ -33,7 +34,7 @@ cd ygopromcp
 ```
 
 A source checkout alone is not a ready-to-play installation. The reviewed
-Windows package plan includes the native launcher, required DLLs, original
+Windows package includes the native launcher, required DLLs, original
 functional textures and licensed fonts. On first run, the launcher can fetch
 and validate a pinned compatible English card database and scripts without
 overwriting existing user data. Card artwork is not included. See
@@ -78,24 +79,28 @@ tested on Linux; that is narrower than a full Linux client build.
 
 ## MCP setup and tools
 
-Configure a **single** stdio client to launch a **single** graphical client
-process, with its working directory set to the prepared runtime. The exact
-MCP-client configuration syntax varies; this is the usual shape:
+For the Windows package, run `Play YGOPro.cmd` once to complete first-run
+game-data setup. Then use `MCP YGOPro.cmd` as the stdio client's command.
+Equivalently, launch the packaged `YGOProUpdateLauncher.exe` with `--mcp`.
+The launcher starts the graphical client and sets its game working directory
+to the package folder. The exact MCP-client configuration syntax varies; this
+is the usual shape for a client that accepts an executable and arguments:
 
 ```json
 {
   "mcpServers": {
     "ygopromcp": {
       "type": "stdio",
-      "command": "/absolute/path/to/YGOPro",
-      "args": []
+      "command": "C:\\path\\to\\YGOProUpdateLauncher.exe",
+      "args": ["--mcp"]
     }
   }
 }
 ```
 
-On Windows use `YGOPro.exe`. Set the launcher/client's working directory to
-the runtime; an MCP client that cannot set it can use a small local launcher.
+Run one stdio MCP client per game process. `Play YGOPro.cmd` starts the
+ordinary game; the optional localhost HTTP MCP control is enabled separately
+on its home screen.
 The server handles `initialize`, `ping`, and `tools/list`; initialization reports MCP
 protocol version `2024-11-05`. Call `tools/list` for the authoritative
 input schemas of the executable you actually launched. For example,
@@ -223,8 +228,9 @@ sequence. These are scoped functional fixtures, not tournament legality,
 competitive consistency, or universal card-script coverage. Replay playback,
 tag/match siding, full MSVC and full Linux GUI runs remain unverified.
 
-If the MCP client sees no tools, check that it launched the graphical
-executable with stdio pipes and sent `initialize` then `tools/list`.
+If the MCP client sees no tools, check that it launched `MCP YGOPro.cmd`
+or `YGOProUpdateLauncher.exe --mcp` with stdio pipes and sent `initialize`
+then `tools/list`.
 Keep stdout protocol-clean; `YGOCLI_MCP_DEBUG=1` sends transport/prompt
 traces to stderr. If the GUI opens with missing names/art, inspect its
 working directory and compatible `cards.cdb`, `script/`, `textures/` and
